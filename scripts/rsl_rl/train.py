@@ -54,6 +54,10 @@ import importlib.metadata as metadata
 import platform
 
 from packaging import version
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE import MoEActorCritic
+# Make the class available in the runner module's namespace
+import rsl_rl.runners.on_policy_runner as runner_module
+runner_module.MoEActorCritic = MoEActorCritic
 
 # check minimum supported rsl-rl version
 RSL_RL_VERSION = "3.0.1"
@@ -149,13 +153,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         omni.log.warn(
             "IO descriptors are only supported for manager based RL environments. No IO descriptors will be exported."
         )
-
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-
+    
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
@@ -178,7 +181,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-
+    # # DEBUG
+    # print("Obs space:", env.observation_space)
+    # print("Obs low:", env.observation_space.low)
+    # print("Obs high:", env.observation_space.high)
+    # assert False
     # create runner from rsl-rl
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
@@ -222,13 +229,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     complete_model_data = {
         'actor': model.actor,
+        'critic': model.critic,
+        'obs_range': getattr(model, 'obs_range', None),
         # 'optimizer_state': runner.alg.optimizer.state_dict() if hasattr(runner.alg, 'optimizer') else None,
         # 'agent_config': agent_cfg,
         # 'env_config': env_cfg,
         # 'iteration': agent_cfg.max_iterations,
         # 'model_state_dict': model.state_dict() if model is not None else None
     }
-    
+    print(f"[INFO]: obs_range: {complete_model_data['obs_range']}")
     complete_model_path = os.path.join(log_dir, "complete_model_with_metadata.pth")
     torch.save(complete_model_data, complete_model_path)
     print(f"[INFO]: Complete model with metadata saved to: {complete_model_path}")
