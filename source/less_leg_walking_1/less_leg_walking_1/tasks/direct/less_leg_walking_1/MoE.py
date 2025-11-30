@@ -5,10 +5,10 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
-    observable_dim: int = 64
+    observable_dim: int = 32
+    # raw_obs_dim: int = 226
     hidden_dim_moe: list[int] = [512, 256, 128]
-    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth"
-    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
+    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -55,15 +55,15 @@ class MoEActorCritic(ActorCritic):
         self.n_experts = n_experts
        
         # Extract custom params from kwargs to avoid conflicts
-        self.observable_dim = kwargs.pop('observable_dim', 64)
+        # self.raw_obs_dim = kwargs.pop('raw_obs_dim', 226)
+        self.observable_dim = kwargs.pop('observable_dim', 32)
         self.hidden_dim_moe = kwargs.pop('hidden_dim_moe', [512, 256, 128])
         self.padded_dim = kwargs.pop('padded_dim', 256)
         self.obs_dim = kwargs.pop('obs_dim', 235)
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
-        # self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth")
-        self.kae_path = kwargs.pop('kae_path', "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth")
+        self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth")
         self.device = kwargs.pop('device', "cuda")
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p', 1)
@@ -118,6 +118,9 @@ class MoEActorCritic(ActorCritic):
             init_noise_std=init_noise_std,
             **kwargs,
         )
+
+        self._use_actor_obs_norm = hasattr(self, "actor_obs_normalizer") and self.actor_obs_normalizer is not None
+        self._use_critic_obs_norm = hasattr(self, "critic_obs_normalizer") and self.critic_obs_normalizer is not None
 
         # remove self.distribution assignment
 
@@ -199,16 +202,31 @@ class MoEActorCritic(ActorCritic):
             tensor = obs
         return tensor
 
-    def _prep_obs(self, obs):
+    def _pad_to_dim(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.shape[-1] < self.padded_dim:
+            pad_size = self.padded_dim - tensor.shape[-1]
+            return F.pad(tensor, (0, pad_size), value=1.0)
+        return tensor[..., : self.padded_dim]
+
+    def _prep_obs(self, obs, for_critic: bool = False, return_raw: bool = False):
         obs_tensor = self._extract_obs_tensor(obs).to(self.device, dtype=torch.float32)
         if obs_tensor.ndim == 1:
             obs_tensor = obs_tensor.unsqueeze(0)
-        if obs_tensor.shape[-1] < self.padded_dim:
-            pad_size = self.padded_dim - obs_tensor.shape[-1]
-            padded_obs = F.pad(obs_tensor, (0, pad_size), value=1.0)
+
+        raw_obs = self._pad_to_dim(obs_tensor).clone() if return_raw else None
+
+        if for_critic and self._use_critic_obs_norm:
+            normalized_obs = self.critic_obs_normalizer(obs_tensor)
+        elif not for_critic and self._use_actor_obs_norm:
+            normalized_obs = self.actor_obs_normalizer(obs_tensor)
         else:
-            padded_obs = obs_tensor[..., : self.padded_dim]
-        return padded_obs
+            normalized_obs = obs_tensor
+
+        normalized_obs = self._pad_to_dim(normalized_obs)
+
+        if return_raw:
+            return normalized_obs, raw_obs
+        return normalized_obs
 
     def forward(self, obs):
         padded_obs = self._prep_obs(obs)

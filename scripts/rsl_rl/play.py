@@ -60,6 +60,11 @@ import torch
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE import MoEActorCritic
+import rsl_rl.runners.on_policy_runner
+# Inject the class so eval("MoEActorCritic") inside the runner can find it
+rsl_rl.runners.on_policy_runner.MoEActorCritic = MoEActorCritic
+
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
