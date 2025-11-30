@@ -79,6 +79,11 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import less_leg_walking_1.tasks  # noqa: F401
 
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE import MoEActorCritic
+# Make the class available in the runner module's namespace
+import rsl_rl.runners.on_policy_runner as runner_module
+runner_module.MoEActorCritic = MoEActorCritic
+
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):

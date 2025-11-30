@@ -5,9 +5,10 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
-    observable_dim: int = 32
+    observable_dim: int = 64
     hidden_dim_moe: list[int] = [512, 256, 128]
-    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth"
+    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth"
+    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -49,17 +50,19 @@ sys.modules.setdefault(
 )
 
 class MoEActorCritic(ActorCritic):
-    def __init__(self, num_actor_obs, num_critic_obs, num_actions, **kwargs):  # Accept additional kwargs from cfg
-
+    def __init__(self, num_actor_obs, num_critic_obs, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
+       
+        self.n_experts = n_experts
         
         # Extract custom params from kwargs to avoid conflicts
-        self.observable_dim = kwargs.pop('observable_dim', 32)
+        self.observable_dim = kwargs.pop('observable_dim', 64)
         self.hidden_dim_moe = kwargs.pop('hidden_dim_moe', [512, 256, 128])
         self.padded_dim = kwargs.pop('padded_dim', 256)
         self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
-        self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth")
+        # self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth")
+        self.kae_path = kwargs.pop('kae_path', "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth")
         self.device = kwargs.pop('device', "cuda")
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p', 1)
@@ -145,24 +148,24 @@ class MoEActorCritic(ActorCritic):
         self._cached_mu: torch.Tensor | None = None
         self._cached_sigma: torch.Tensor | None = None
 
-    @property
-    def action_mean(self):
-        if self._cached_mu is None:
-            raise RuntimeError("Action mean unavailable. Call act() first.")
-        return self._cached_mu
+    # @property
+    # def action_mean(self):
+    #     if self._cached_mu is None:
+    #         raise RuntimeError("Action mean unavailable. Call act() first.")
+    #     return self._cached_mu
 
-    @property
-    def action_std(self):
-        if self._cached_sigma is None:
-            raise RuntimeError("Action std unavailable. Call act() first.")
-        return self._cached_sigma
+    # @property
+    # def action_std(self):
+    #     if self._cached_sigma is None:
+    #         raise RuntimeError("Action std unavailable. Call act() first.")
+    #     return self._cached_sigma
 
-    @property
-    def entropy(self):
-        if self._cached_mu is None or self._cached_sigma is None:
-            raise RuntimeError("Entropy unavailable. Call act() first.")
-        dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-        return dist.entropy().sum(dim=-1)
+    # @property
+    # def entropy(self):
+    #     if self._cached_mu is None or self._cached_sigma is None:
+    #         raise RuntimeError("Entropy unavailable. Call act() first.")
+    #     dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
+    #     return dist.entropy().sum(dim=-1)
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -200,53 +203,79 @@ class MoEActorCritic(ActorCritic):
         # Record the maximum range of the padded observations on every channel among all batches
         obs_range_temp = [(padded_obs[..., i].min().item(), padded_obs[..., i].max().item()) for i in range(padded_obs.shape[-1])]
         self.obs_range = [(min(self.obs_range[i][0], obs_range_temp[i][0]), max(self.obs_range[i][1], obs_range_temp[i][1])) for i in range(len(obs_range_temp))]
+      
         with torch.no_grad():  
             _, latent_z, _ = self.kae(padded_obs)
-        latent_z = latent_z.detach()
-        if latent_z.ndim == 1:
-            latent_z = latent_z.unsqueeze(0)
 
-        experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim*2), the last dimension is mean and std
+            latent_z = latent_z.detach()
+            if latent_z.ndim == 1:
+                latent_z = latent_z.unsqueeze(0)
+
+            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim*2), the last dimension is mean and std
         # print(f"experts_outputs shape: {experts_outputs.shape}")
         # extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
         weights = self.actor(padded_obs)
+        # #####
+        # weights = torch.softmax(weights, dim=-1)
+        # ####
+
         # print(f"weights shape: {weights.shape}")
         outputs = torch.sum(weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
+       
+
         mu = outputs[..., : self.act_dim]
         sigma = torch.clamp(torch.exp(outputs[..., self.act_dim:]), min=1e-6, max=5.0)
         value = self.critic(padded_obs)  # keep shape [B, 1]
         # print(f"action shape:{outputs.shape}", f"mu  shape:{mu.shape}", f"sigma shape:{sigma.shape}", f"value shape:{value.shape}")
         # assert False
+
         return mu, sigma, value
 
     def get_value(self, obs):
-        padded_obs = self._prep_obs(obs)
-        return self.critic(padded_obs)  # shape [B, 1]
+        _, _, value = self.forward(obs)
+        return value  # [B, 1]
 
-    def act(self, obs, masks=None, hidden_states=None, deterministic=False):
-        with torch.no_grad():
-            mu, sigma, _ = self.forward(obs)
-            self._cached_mu = mu.detach()
-            self._cached_sigma = sigma.detach()
-            dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-            actions = dist.mean if deterministic else dist.sample()
-        return actions
+    # def get_value(self, obs):
+    #     padded_obs = self._prep_obs(obs)
+    #     return self.critic(padded_obs)  # shape [B, 1]
 
-    def get_actions_log_prob(self, actions):
-        if self._cached_mu is None or self._cached_sigma is None:
-            raise RuntimeError("Call act() before querying log-prob.")
-        dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-        return dist.log_prob(actions).sum(dim=-1)
+    # def act(self, obs, masks=None, hidden_states=None, deterministic=False):
+    #     with torch.no_grad():
+    #         mu, sigma, _ = self.forward(obs)
+    #         self._cached_mu = mu.detach()
+    #         self._cached_sigma = sigma.detach()
+    #         dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
+    #         actions = dist.mean if deterministic else dist.sample()
+    #     return actions
 
-    def get_actions_entropy(self):
-        if self._cached_mu is None or self._cached_sigma is None:
-            raise RuntimeError("Call act() before querying entropy.")
-        dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-        return dist.entropy().sum(dim=-1)
+    # def act(self, obs, masks=None, hidden_states=None, deterministic=False):
+    #     mu, sigma, _ = self.forward(obs)     # ✅ keep graph
+    #     self._cached_mu = mu
+    #     self._cached_sigma = sigma
+    #     dist = torch.distributions.Normal(mu, sigma)
+    #     actions = dist.mean if deterministic else dist.sample()
+    #     return actions
 
-    # def update_distribution(self, obs):
-    #     raise NotImplementedError  # optional: delete method entirely if unused
+    # def get_actions_log_prob(self, actions):
+    #     if self._cached_mu is None or self._cached_sigma is None:
+    #         raise RuntimeError("Call act() before querying log-prob.")
+    #     dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
+    #     return dist.log_prob(actions).sum(dim=-1)
+
+    # def get_actions_entropy(self):
+    #     if self._cached_mu is None or self._cached_sigma is None:
+    #         raise RuntimeError("Call act() before querying entropy.")
+    #     dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
+    #     return dist.entropy().sum(dim=-1)
+
+    def update_distribution(self, obs, masks=None, hidden_states=None):
+        # Use your MoE forward to define the Gaussian policy
+        mu, sigma, _ = self.forward(obs)  # [B, act_dim]
+        self._action_mean = mu
+        self._action_std = sigma
+        self.distribution = torch.distributions.Normal(mu,sigma)
+        # print(self._cached_mu.requires_grad, self._cached_sigma.requires_grad, flush=True)
 
     def evaluate(self, obs, actions=None, masks=None, hidden_states=None):
         value = self.get_value(obs)

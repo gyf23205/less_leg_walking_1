@@ -3,6 +3,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import sys
+sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+
 """Script to train RL agent with RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""
@@ -181,6 +184,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    
     # # DEBUG
     # print("Obs space:", env.observation_space)
     # print("Obs low:", env.observation_space.low)
@@ -193,6 +197,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+ 
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
@@ -208,7 +213,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # run training
+    _w0 = next(p for m in [getattr(runner.alg, a) for a in dir(runner.alg) if isinstance(getattr(runner.alg, a, None), torch.nn.Module)] for p in m.parameters() if p.requires_grad).detach().clone()
+
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+
+    sys.__stdout__.write(f"[LEARNING?] {torch.norm(_w0 - next(p for m in [getattr(runner.alg, a) for a in dir(runner.alg) if isinstance(getattr(runner.alg, a, None), torch.nn.Module)] for p in m.parameters() if p.requires_grad)).item() > 1e-5}\n")
+
+
 
     # Save complete model with metadata
     # Try different common attribute names for the model
@@ -226,6 +237,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         print(f"Warning: Could not find model in runner.alg. Available attributes: {[attr for attr in dir(runner.alg) if not attr.startswith('_')]}")
         model = None
+
 
     complete_model_data = {
         'actor': model.actor,
@@ -248,6 +260,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 if __name__ == "__main__":
     # run the main function
+    torch.set_grad_enabled(True)
     main()
     # close sim app
     simulation_app.close()

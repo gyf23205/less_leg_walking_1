@@ -62,7 +62,9 @@ def get_experts_outputs(kae, z, p, act_dim, conjugate=False):
         expert_outputs = (((eigvals**p)*phi).unsqueeze(1)*v).conj()
     else:
         expert_outputs = ((eigvals**p)*phi).unsqueeze(1)*v
-    return expert_outputs[:, :act_dim*2, :].transpose(1, 2).to(torch.float32) # (Batch, observable_dim(+act_dim if using the extended experts), act_dim*2), the last dimension is mean and std
+
+    output = expert_outputs[:, :act_dim*2, :].transpose(1, 2).real
+    return output.to(dtype=torch.float32, copy=False) # (Batch, observable_dim(+act_dim if using the extended experts), act_dim*2), the last dimension is mean and std
 
 def compute_grad_norm(model):
     total_norm = 0.0
