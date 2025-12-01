@@ -32,7 +32,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=0.02,  # Increased entropy for more exploration
         num_learning_epochs=8,  # More learning epochs
         num_mini_batches=4,
-        learning_rate=3.0e-4,  # Slightly lower learning rate for stability
+        learning_rate=3.0e-4,  # 3.0e-4, -> 1.0e-4 Slightly lower learning rate for stability
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,

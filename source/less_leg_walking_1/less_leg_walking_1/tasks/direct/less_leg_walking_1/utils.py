@@ -50,7 +50,11 @@ def get_experts_outputs(kae, z, p, act_dim, conjugate=False):
     eigvec_left = eigvec_left.conj().T.unsqueeze(0)
     # print(f"eigvals shape: {eigvals.shape}", f"eigvec_left shape: {eigvec_left.shape}")
     # assert False
+
     eigvec_left_inv = torch.linalg.inv(eigvec_left)
+    # #####
+    # eigvec_left_inv =  torch.linalg.pinv(eigvec_left, rcond=1e-5)
+    # #####
 
     B = kae.decoder.linear.weight.detach().clone()
     B = B.to(torch.complex64)
