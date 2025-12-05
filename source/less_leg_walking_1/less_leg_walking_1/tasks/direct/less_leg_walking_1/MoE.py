@@ -58,7 +58,8 @@ class MoEActorCritic(ActorCritic):
         self.observable_dim = kwargs.pop('observable_dim', 64)
         self.hidden_dim_moe = kwargs.pop('hidden_dim_moe', [512, 256, 128])
         self.padded_dim = kwargs.pop('padded_dim', 256)
-        self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
+        self.obs_dim = kwargs.pop('obs_dim', 235)
+        # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
         # self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth")
@@ -127,20 +128,27 @@ class MoEActorCritic(ActorCritic):
         
         # Define trainable MoE layers for actor (outputs mean and std for actions)
         actor_layers = []
+
+        ########
         input_dim = self.padded_dim
+        # input_dim = self.padded_dim + self.observable_dim
 
         for h in self.hidden_dim_moe:
             actor_layers.append(nn.Linear(input_dim, h))
             actor_layers.append(nn.ELU())
             input_dim = h
 
-        actor_layers.append(nn.Linear(input_dim, self.observable_dim))  # weights for experts
+        actor_layers.append(nn.Linear(input_dim, self.observable_dim+self.act_dim))  # weights for experts
+        ########
         self.actor = nn.Sequential(*actor_layers)
         
         # Define critic network (value head)
         critic_layers = []
-        input_dim = self.padded_dim
 
+        ########
+        input_dim = self.padded_dim
+        # input_dim = self.padded_dim + self.observable_dim
+        ########
         
         for h in self.hidden_dim_moe:
             critic_layers.append(nn.Linear(input_dim, h))
@@ -217,23 +225,19 @@ class MoEActorCritic(ActorCritic):
 
             experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim*2), the last dimension is mean and std
         # print(f"experts_outputs shape: {experts_outputs.shape}")
-        # extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
-
+        extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
         weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
 
         #######
         # weights = torch.softmax(weights, dim=-1)
-        weights = torch.tanh(weights)
+        # weights = torch.tanh(weights)
         #######
         
-        
-        # print(f"weights shape: {weights.shape}")
-        outputs = torch.sum(weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
-       
-
+        outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
         mu = outputs[..., : self.act_dim]
         sigma = torch.clamp(torch.exp(outputs[..., self.act_dim:]), min=1e-6, max=5.0)
+
         value = self.critic(padded_obs)  # keep shape [B, 1]
         # print(f"action shape:{outputs.shape}", f"mu  shape:{mu.shape}", f"sigma shape:{sigma.shape}", f"value shape:{value.shape}")
         # assert False

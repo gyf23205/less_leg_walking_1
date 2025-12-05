@@ -15,8 +15,24 @@ def select_action(obs, policy_net, device):
     return action.item(), log_prob.item(), dist
 
 def extend_experts_outputs(experts_outputs, act_dim):
-    extends = torch.diag(torch.ones(act_dim, dtype=experts_outputs.dtype, device=experts_outputs.device)).tile(experts_outputs.shape[0], 1, 1)
+    # extends = torch.diag(torch.ones(act_dim, dtype=experts_outputs.dtype, device=experts_outputs.device)).tile(experts_outputs.shape[0], 1, 1)
+    # extended_outputs = torch.cat([experts_outputs, extends], dim=1)
+
+    B, D, K = experts_outputs.shape
+
+    # Identity matrix [act_dim, act_dim]
+    eye = torch.eye(act_dim, dtype=experts_outputs.dtype, device=experts_outputs.device)
+
+    # Make [B, act_dim, K] by tiling along batch and expert dims
+    extends = eye[:, :K] if K <= act_dim else eye.repeat_interleave((K + act_dim - 1) // act_dim, dim=1)[:, :K]
+    extends = extends.unsqueeze(0).expand(B, -1, -1)
+
+    # Concatenate along 2nd dim
     extended_outputs = torch.cat([experts_outputs, extends], dim=1)
+
+    assert experts_outputs.shape[2] == act_dim*2, \
+        "Last dimension must equal act_dim for identity extension."
+    
     return extended_outputs
 
 def compute_gae(rewards, values, dones, next_value, gamma=0.99, gae_lambda=0.95):
