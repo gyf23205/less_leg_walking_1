@@ -51,7 +51,7 @@ sys.modules.setdefault(
 
 class MoEActorCritic(ActorCritic):
     def __init__(self, num_actor_obs, num_critic_obs, num_actions, **kwargs):  # Accept additional kwargs from cfg
-
+        print("[DEBUG] Initializing MoEActorCritic")
         
         # Extract custom params from kwargs to avoid conflicts
         # self.raw_obs_dim = kwargs.pop('raw_obs_dim', 226)
@@ -116,6 +116,15 @@ class MoEActorCritic(ActorCritic):
             init_noise_std=init_noise_std,
             **kwargs,
         )
+
+        # Ensure gradients are enabled for actor and critic
+        for param in self.actor.parameters():
+            param.requires_grad = True
+        for param in self.critic.parameters():
+            param.requires_grad = True
+
+        # Add a utility to check gradients
+        self._check_gradients_enabled()
 
         self._use_actor_obs_norm = hasattr(self, "actor_obs_normalizer") and self.actor_obs_normalizer is not None
         self._use_critic_obs_norm = hasattr(self, "critic_obs_normalizer") and self.critic_obs_normalizer is not None
@@ -216,7 +225,12 @@ class MoEActorCritic(ActorCritic):
         return normalized_obs
 
     def forward(self, obs):
+        # Ensure no unnecessary torch.no_grad() blocks
         normalized_obs, raw_obs = self._prep_obs(obs, for_critic=False, return_raw=True)
+
+        weights = self.actor(normalized_obs)
+        print(f"[DEBUG] weights requires_grad: {weights.requires_grad}")
+
         # Record the maximum range of the padded observations on every channel among all batches using raw values
         obs_range_temp = [
             (raw_obs[..., i].min().item(), raw_obs[..., i].max().item()) for i in range(raw_obs.shape[-1])
@@ -230,22 +244,19 @@ class MoEActorCritic(ActorCritic):
         ]
         with torch.no_grad():
             _, latent_z, _ = self.kae(raw_obs)
-        latent_z = latent_z.detach()
+        latent_z = latent_z.detach()  # Ensure only latent_z is detached, not the entire computation graph
         if latent_z.ndim == 1:
             latent_z = latent_z.unsqueeze(0)
 
         experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # (Batch, observable_dim, act_dim*2), the last dimension is mean and std
-        # print(f"experts_outputs shape: {experts_outputs.shape}")
-        # extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
+        print(f"[DEBUG] experts_outputs stats: mean={experts_outputs.mean().item()}, std={experts_outputs.std().item()}")
 
-        weights = self.actor(normalized_obs)
-        # print(f"weights shape: {weights.shape}")
         outputs = torch.sum(weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
+        print(f"[DEBUG] outputs requires_grad: {outputs.requires_grad}")
+
         mu = outputs[..., : self.act_dim]
         sigma = torch.clamp(torch.exp(outputs[..., self.act_dim:]), min=1e-6, max=5.0)
         value = self.critic(normalized_obs)  # keep shape [B, 1]
-        # print(f"action shape:{outputs.shape}", f"mu  shape:{mu.shape}", f"sigma shape:{sigma.shape}", f"value shape:{value.shape}")
-        # assert False
         return mu, sigma, value
 
     def get_value(self, obs):
@@ -282,7 +293,29 @@ class MoEActorCritic(ActorCritic):
             return value
 
         mu, sigma, _ = self.forward(obs)
+
         dist = torch.distributions.Normal(mu, sigma)
         log_prob = dist.log_prob(actions).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
+
+        print(f"[DEBUG] Log probabilities: {log_prob.mean().item()}, Entropy: {entropy.mean().item()}")
+        print(f"[DEBUG] log_prob requires_grad: {log_prob.requires_grad}")
+
         return value, log_prob, entropy
+
+    def _check_gradients_enabled(self):
+        """Utility to check if gradients are enabled for model parameters."""
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(f"Gradient enabled for: {name}")
+            else:
+                print(f"WARNING: Gradient disabled for: {name}")
+
+    def log_gradients(self):
+        """Log the gradients of the model's parameters."""
+        print("[DEBUG] Executing log_gradients for MoEActorCritic")
+        for name, param in self.named_parameters():
+            if param.grad is not None:
+                print(f"Gradient for {name}: {param.grad.norm().item()}")
+            else:
+                print(f"Gradient for {name}: None (parameter is not updated)")
