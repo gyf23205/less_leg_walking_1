@@ -57,10 +57,10 @@ import importlib.metadata as metadata
 import platform
 
 from packaging import version
-from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE import MoEActorCritic
-# Make the class available in the runner module's namespace
-import rsl_rl.runners.on_policy_runner as runner_module
-runner_module.MoEActorCritic = MoEActorCritic
+# from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE import MoEActorCritic
+# # Make the class available in the runner module's namespace
+# import rsl_rl.runners.on_policy_runner as runner_module
+# runner_module.MoEActorCritic = MoEActorCritic
 
 # check minimum supported rsl-rl version
 RSL_RL_VERSION = "3.0.1"

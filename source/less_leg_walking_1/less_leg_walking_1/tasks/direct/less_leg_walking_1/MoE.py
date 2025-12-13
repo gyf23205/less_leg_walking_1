@@ -119,6 +119,15 @@ class MoEActorCritic(ActorCritic):
             **kwargs,
         )
 
+        # Ensure gradients are enabled for actor and critic
+        for param in self.actor.parameters():
+            param.requires_grad = True
+        for param in self.critic.parameters():
+            param.requires_grad = True
+
+        # Add a utility to check gradients
+        self._check_gradients_enabled()
+
         self._use_actor_obs_norm = hasattr(self, "actor_obs_normalizer") and self.actor_obs_normalizer is not None
         self._use_critic_obs_norm = hasattr(self, "critic_obs_normalizer") and self.critic_obs_normalizer is not None
 
@@ -313,7 +322,29 @@ class MoEActorCritic(ActorCritic):
             return value
 
         mu, sigma, _ = self.forward(obs)
+
         dist = torch.distributions.Normal(mu, sigma)
         log_prob = dist.log_prob(actions).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
+
+        print(f"[DEBUG] Log probabilities: {log_prob.mean().item()}, Entropy: {entropy.mean().item()}")
+        print(f"[DEBUG] log_prob requires_grad: {log_prob.requires_grad}")
+
         return value, log_prob, entropy
+
+    def _check_gradients_enabled(self):
+        """Utility to check if gradients are enabled for model parameters."""
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(f"Gradient enabled for: {name}")
+            else:
+                print(f"WARNING: Gradient disabled for: {name}")
+
+    def log_gradients(self):
+        """Log the gradients of the model's parameters."""
+        print("[DEBUG] Executing log_gradients for MoEActorCritic")
+        for name, param in self.named_parameters():
+            if param.grad is not None:
+                print(f"Gradient for {name}: {param.grad.norm().item()}")
+            else:
+                print(f"Gradient for {name}: None (parameter is not updated)")
