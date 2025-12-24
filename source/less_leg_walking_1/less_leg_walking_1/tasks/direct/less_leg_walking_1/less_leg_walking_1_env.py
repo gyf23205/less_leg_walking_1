@@ -61,10 +61,10 @@ class LessLegWalkingEnv(DirectRLEnv):
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
-            # we add a height scanner for perceptive locomotion
-            self._height_scanner = RayCaster(self.cfg.height_scanner)
-            self.scene.sensors["height_scanner"] = self._height_scanner
+        # if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
+        #     # we add a height scanner for perceptive locomotion
+        self._height_scanner = RayCaster(self.cfg.height_scanner)
+        self.scene.sensors["height_scanner"] = self._height_scanner
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -102,7 +102,7 @@ class LessLegWalkingEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
         height_data = None
-        if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
+        if isinstance(self.cfg, LessLegWalkingFlatEnvCfg):
             height_data = (
                 self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
             ).clip(-1.0, 1.0)
@@ -116,24 +116,56 @@ class LessLegWalkingEnv(DirectRLEnv):
         joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
         joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
         
+        # obs = torch.cat(
+        #     [
+        #         tensor
+        #         for tensor in (
+        #             self._robot.data.root_lin_vel_b,          # 3
+        #             self._robot.data.root_ang_vel_b,          # 3  
+        #             self._robot.data.projected_gravity_b,     # 3
+        #             self._commands,                           # 3
+        #             joint_pos_active,                        # 9 (reduced from 12)
+        #             joint_vel_active,                        # 9 (reduced from 12)
+        #             height_data,                              # 187 for rough terrain or None for flat
+        #             self._actions,                            # 9 (reduced from 12)
+        #         )
+        #         if tensor is not None
+        #     ],
+        #     dim=-1,
+        # )
+
+        augmented_action = torch.nn.functional.pad(self._actions, (0,3), mode="constant", value = 0) # padding non_active input as 0
+        # print(augmented_action.size())
+
         obs = torch.cat(
             [
                 tensor
                 for tensor in (
-                    self._robot.data.root_lin_vel_b,          # 3
-                    self._robot.data.root_ang_vel_b,          # 3  
-                    self._robot.data.projected_gravity_b,     # 3
-                    self._commands,                           # 3
-                    joint_pos_active,                        # 9 (reduced from 12)
-                    joint_vel_active,                        # 9 (reduced from 12)
-                    height_data,                              # 187 for rough terrain or None for flat
-                    self._actions,                            # 9 (reduced from 12)
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_ang_vel_b,
+                    self._robot.data.projected_gravity_b,
+                    self._commands,
+                    self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+                    self._robot.data.joint_vel,
+                    height_data,
+                    # self._actions,
+                    augmented_action,
                 )
                 if tensor is not None
             ],
             dim=-1,
         )
+
         observations = {"policy": obs}
+
+        # print(observations["policy"].size())
+        # temp_a = self._robot.data.joint_pos
+        # print("_robot.data.joint_pos: ", temp_a.size())
+        # print("joint_pos_active", joint_pos_active.size())
+        # temp_b = self._robot.data.joint_vel
+        # print("_robot.data.joint_vel: ", temp_b.size())
+        # print("joint_vel_active: ", joint_vel_active.size())
+
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
