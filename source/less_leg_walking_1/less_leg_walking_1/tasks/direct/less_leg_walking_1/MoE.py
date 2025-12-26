@@ -7,7 +7,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     padded_dim: int = 256
     observable_dim: int = 32
     # raw_obs_dim: int = 226
-    hidden_dim_moe: list[int] = [512, 256, 128]
+    actor_hidden_dims: list[int] = [512, 256, 128]
+    critic_hidden_dims: list[int] = [512, 256, 128]
     kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     device: str = "cuda"
     n_experts: int = 1
@@ -51,43 +52,48 @@ sys.modules.setdefault(
 
 class MoEActorCritic(ActorCritic):
     def __init__(self, num_actor_obs, num_critic_obs, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
-       
+        # DEBUG
+        # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        # print(num_actor_obs)
+        # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        # assert False
         self.n_experts = n_experts
        
         # Extract custom params from kwargs to avoid conflicts
         # self.raw_obs_dim = kwargs.pop('raw_obs_dim', 226)
-        self.observable_dim = kwargs.pop('observable_dim', 32)
-        self.hidden_dim_moe = kwargs.pop('hidden_dim_moe', [512, 256, 128])
-        self.padded_dim = kwargs.pop('padded_dim', 256)
-        self.obs_dim = kwargs.pop('obs_dim', 235)
+        self.observable_dim = kwargs.pop('observable_dim')
+        actor_hidden_dims = kwargs.pop('actor_hidden_dims')
+        critic_hidden_dims = kwargs.pop('critic_hidden_dims')
+        self.padded_dim = kwargs.pop('padded_dim')
+        self.obs_dim = kwargs.pop('obs_dim')
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
-        self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth")
-        self.device = kwargs.pop('device', "cuda")
+        self.kae_path = kwargs.pop('kae_path')
+        self.device = kwargs.pop('device')
         # self.n_experts = kwargs.pop('n_experts', 1)
-        self.p = kwargs.pop('p', 1)
-        raw_activation = kwargs.pop("activation", "elu")
-        if isinstance(raw_activation, dict):
-            activation = raw_activation.get("name", "elu")
-        else:
-            activation = raw_activation
+        self.p = kwargs.pop('p')
+        activation = kwargs.pop("activation")
+        # if isinstance(raw_activation, dict):
+        #     activation = raw_activation.get("name", "elu")
+        # else:
+        #     activation = raw_activation
 
-        raw_actor_hidden = kwargs.pop("actor_hidden_dims", [512, 256, 128])
-        if isinstance(raw_actor_hidden, dict):
-            actor_hidden_dims = raw_actor_hidden.get("units", [])
-        else:
-            actor_hidden_dims = raw_actor_hidden
-        if not actor_hidden_dims:
-            actor_hidden_dims = [512, 256, 128]
+        # raw_actor_hidden = kwargs.pop("actor_hidden_dims", [512, 256, 128])
+        # if isinstance(raw_actor_hidden, dict):
+        #     actor_hidden_dims = raw_actor_hidden.get("units", [])
+        # else:
+        #     actor_hidden_dims = raw_actor_hidden
+        # if not actor_hidden_dims:
+        #     actor_hidden_dims = [512, 256, 128]
 
-        raw_critic_hidden = kwargs.pop("critic_hidden_dims", [512, 256, 128])
-        if isinstance(raw_critic_hidden, dict):
-            critic_hidden_dims = raw_critic_hidden.get("units", [])
-        else:
-            critic_hidden_dims = raw_critic_hidden
-        if not critic_hidden_dims:
-            critic_hidden_dims = [512, 256, 128]
+        # raw_critic_hidden = kwargs.pop("critic_hidden_dims", [512, 256, 128])
+        # if isinstance(raw_critic_hidden, dict):
+        #     critic_hidden_dims = raw_critic_hidden.get("units", [])
+        # else:
+        #     critic_hidden_dims = raw_critic_hidden
+        # if not critic_hidden_dims:
+        #     critic_hidden_dims = [512, 256, 128]
 
         raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
         if isinstance(raw_init_noise_std, dict):
@@ -138,6 +144,7 @@ class MoEActorCritic(ActorCritic):
         for param in self.kae.parameters():
             param.requires_grad = False
         
+        # DEBUG: why need to create actor and critic with Sequential but not directly using KAEAutoencoder_walk?
         # Define trainable MoE layers for actor (outputs mean and std for actions)
         actor_layers = []
 
@@ -171,25 +178,6 @@ class MoEActorCritic(ActorCritic):
 
         self._cached_mu: torch.Tensor | None = None
         self._cached_sigma: torch.Tensor | None = None
-
-    # @property
-    # def action_mean(self):
-    #     if self._cached_mu is None:
-    #         raise RuntimeError("Action mean unavailable. Call act() first.")
-    #     return self._cached_mu
-
-    # @property
-    # def action_std(self):
-    #     if self._cached_sigma is None:
-    #         raise RuntimeError("Action std unavailable. Call act() first.")
-    #     return self._cached_sigma
-
-    # @property
-    # def entropy(self):
-    #     if self._cached_mu is None or self._cached_sigma is None:
-    #         raise RuntimeError("Entropy unavailable. Call act() first.")
-    #     dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-    #     return dist.entropy().sum(dim=-1)
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -255,58 +243,31 @@ class MoEActorCritic(ActorCritic):
         extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
         weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
-
+        # print(f"weights shape: {weights.shape}")
         #######
         # weights = torch.softmax(weights, dim=-1)
         # weights = torch.tanh(weights)
         #######
         
         outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
+        # print(f"outputs shape: {outputs.shape}")
         mu = outputs[..., : self.act_dim]
-        sigma = torch.clamp(torch.exp(outputs[..., self.act_dim:]), min=1e-6, max=5.0)
-
-        value = self.critic(padded_obs)  # keep shape [B, 1]
-        # print(f"action shape:{outputs.shape}", f"mu  shape:{mu.shape}", f"sigma shape:{sigma.shape}", f"value shape:{value.shape}")
+        # print(f"mu shape: {mu.shape}")
         # assert False
 
+        # Clamp log-std to a safe range, then exponentiate and sanitize
+        log_std = torch.clamp(outputs[..., self.act_dim:], min=-20.0, max=2.0)
+        sigma = torch.exp(log_std)
+        sigma = torch.clamp(sigma, min=1e-5, max=5.0)
+        sigma = torch.where(torch.isfinite(sigma), sigma, torch.full_like(sigma, 1e-3))
+
+        value = self.critic(padded_obs)  # keep shape [B, 1]
         return mu, sigma, value
 
     def get_value(self, obs):
         _, _, value = self.forward(obs)
         return value  # [B, 1]
 
-    # def get_value(self, obs):
-    #     padded_obs = self._prep_obs(obs)
-    #     return self.critic(padded_obs)  # shape [B, 1]
-
-    # def act(self, obs, masks=None, hidden_states=None, deterministic=False):
-    #     with torch.no_grad():
-    #         mu, sigma, _ = self.forward(obs)
-    #         self._cached_mu = mu.detach()
-    #         self._cached_sigma = sigma.detach()
-    #         dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-    #         actions = dist.mean if deterministic else dist.sample()
-    #     return actions
-
-    # def act(self, obs, masks=None, hidden_states=None, deterministic=False):
-    #     mu, sigma, _ = self.forward(obs)     # ✅ keep graph
-    #     self._cached_mu = mu
-    #     self._cached_sigma = sigma
-    #     dist = torch.distributions.Normal(mu, sigma)
-    #     actions = dist.mean if deterministic else dist.sample()
-    #     return actions
-
-    # def get_actions_log_prob(self, actions):
-    #     if self._cached_mu is None or self._cached_sigma is None:
-    #         raise RuntimeError("Call act() before querying log-prob.")
-    #     dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-    #     return dist.log_prob(actions).sum(dim=-1)
-
-    # def get_actions_entropy(self):
-    #     if self._cached_mu is None or self._cached_sigma is None:
-    #         raise RuntimeError("Call act() before querying entropy.")
-    #     dist = torch.distributions.Normal(self._cached_mu, self._cached_sigma)
-    #     return dist.entropy().sum(dim=-1)
 
     def update_distribution(self, obs, masks=None, hidden_states=None):
         # Use your MoE forward to define the Gaussian policy

@@ -61,10 +61,10 @@ class LessLegWalkingEnv(DirectRLEnv):
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
-            # we add a height scanner for perceptive locomotion
-            self._height_scanner = RayCaster(self.cfg.height_scanner)
-            self.scene.sensors["height_scanner"] = self._height_scanner
+        # if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
+        # we add a height scanner for perceptive locomotion
+        self._height_scanner = RayCaster(self.cfg.height_scanner)
+        self.scene.sensors["height_scanner"] = self._height_scanner
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -102,19 +102,31 @@ class LessLegWalkingEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
         height_data = None
-        if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
-            height_data = (
-                self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-            ).clip(-1.0, 1.0)
+        # if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
+        height_data = (
+            self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+        ).clip(-1.0, 1.0)
+
+        ###################### 226 dim observation ##########################
+        # # Get joint positions and velocities for only the 3 active legs
+        # # Joint order in robot: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
+        # # We want: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
+        # joint_indices = torch.tensor([0, 4, 8, 1, 5, 9, 3, 7, 11], device=self.device)
         
-        # Get joint positions and velocities for only the 3 active legs
-        # Joint order in robot: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
-        # We want: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
-        joint_indices = torch.tensor([0, 4, 8, 1, 5, 9, 3, 7, 11], device=self.device)
-        
-        # Extract joint data for active legs only
-        joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
-        joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
+        # # Extract joint data for active legs only
+        # joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
+        # joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
+        ####################################################
+
+        # Use full 12-joint state for observations (keep obs space intact)
+        joint_pos_full = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)
+        joint_vel_full = self._robot.data.joint_vel
+
+        # Pad 9-D actions to 12-D for observation logging
+        padded_actions = torch.zeros(self.num_envs, 12, device=self.device)
+        padded_actions[:, [0, 4, 8]] = self._actions[:, 0:3]   # LF
+        padded_actions[:, [1, 5, 9]] = self._actions[:, 3:6]   # LH
+        padded_actions[:, [3, 7, 11]] = self._actions[:, 6:9]  # RH
         
         obs = torch.cat(
             [
@@ -124,10 +136,13 @@ class LessLegWalkingEnv(DirectRLEnv):
                     self._robot.data.root_ang_vel_b,          # 3  
                     self._robot.data.projected_gravity_b,     # 3
                     self._commands,                           # 3
-                    joint_pos_active,                        # 9 (reduced from 12)
-                    joint_vel_active,                        # 9 (reduced from 12)
+                    # joint_pos_active,                        # 9 (reduced from 12)
+                    # joint_vel_active,                        # 9 (reduced from 12)
+                    joint_pos_full,                           # 12
+                    joint_vel_full,                           # 12
                     height_data,                              # 187 for rough terrain or None for flat
-                    self._actions,                            # 9 (reduced from 12)
+                    # self._actions,                            # 9 (reduced from 12)
+                    padded_actions,                           # 12
                 )
                 if tensor is not None
             ],

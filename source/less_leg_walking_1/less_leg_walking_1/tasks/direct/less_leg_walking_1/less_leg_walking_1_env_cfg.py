@@ -84,8 +84,8 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     episode_length_s = 20.0
     decimation = 4
     action_scale = 0.5
-    action_space = 9  # Changed from 12 to 9 (3 legs × 3 joints)
-    observation_space = 39  # Changed from 48 to 39 (reduced by 9 for missing leg)
+    action_space = 12  # With 3 channels being zeroed out for the missing leg
+    observation_space = 235  # 235 to 226
     state_space = 0
 
     logger = "wandb"                    # enable wandb logger
@@ -145,11 +145,21 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     stability_reward_scale = 0.5  # Reduced to not dominate other rewards
     forward_progress_reward_scale = 2.0  # New reward for forward progress
 
+    # we add a height scanner for perceptive locomotion
+    height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
 
 @configclass
 class LessLegWalkingRoughEnvCfg(LessLegWalkingFlatEnvCfg):
     # env
-    observation_space = 226  # Changed from 235 to 226 (reduced by 9 for missing leg)
+    observation_space = 235  # Changed from 235 to 226 (reduced by 9 for missing leg)
 
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
@@ -170,15 +180,15 @@ class LessLegWalkingRoughEnvCfg(LessLegWalkingFlatEnvCfg):
         debug_vis=False,
     )
 
-    # we add a height scanner for perceptive locomotion
-    height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
-    )
+    # # we add a height scanner for perceptive locomotion
+    # height_scanner = RayCasterCfg(
+    #     prim_path="/World/envs/env_.*/Robot/base",
+    #     offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+    #     ray_alignment="yaw",
+    #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+    #     debug_vis=False,
+    #     mesh_prim_paths=["/World/ground"],
+    # )
 
     # reward scales (override from flat config)
     flat_orientation_reward_scale = 0.0
