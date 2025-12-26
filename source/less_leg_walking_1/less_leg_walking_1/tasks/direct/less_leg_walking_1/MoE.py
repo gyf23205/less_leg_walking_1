@@ -6,7 +6,6 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 32
-    # raw_obs_dim: int = 226
     actor_hidden_dims: list[int] = [512, 256, 128]
     critic_hidden_dims: list[int] = [512, 256, 128]
     kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
@@ -16,6 +15,7 @@ class MoECfg(RslRlPpoActorCriticCfg):
     class_name: str = "MoEActorCritic"
     actor_obs_normalization: bool = True
     critic_obs_normalization: bool = True
+    activation: str = "elu"
     
     # Set explicitly (don't reference other fields)
     # num_actor_obs: int = 256  # Match padded_dim or your obs space
@@ -62,10 +62,9 @@ class MoEActorCritic(ActorCritic):
         # Extract custom params from kwargs to avoid conflicts
         # self.raw_obs_dim = kwargs.pop('raw_obs_dim', 226)
         self.observable_dim = kwargs.pop('observable_dim')
-        actor_hidden_dims = kwargs.pop('actor_hidden_dims')
-        critic_hidden_dims = kwargs.pop('critic_hidden_dims')
+        self.actor_hidden_dims = kwargs.pop('actor_hidden_dims')
+        self.critic_hidden_dims = kwargs.pop('critic_hidden_dims')
         self.padded_dim = kwargs.pop('padded_dim')
-        self.obs_dim = kwargs.pop('obs_dim')
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
@@ -74,26 +73,7 @@ class MoEActorCritic(ActorCritic):
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p')
         activation = kwargs.pop("activation")
-        # if isinstance(raw_activation, dict):
-        #     activation = raw_activation.get("name", "elu")
-        # else:
-        #     activation = raw_activation
-
-        # raw_actor_hidden = kwargs.pop("actor_hidden_dims", [512, 256, 128])
-        # if isinstance(raw_actor_hidden, dict):
-        #     actor_hidden_dims = raw_actor_hidden.get("units", [])
-        # else:
-        #     actor_hidden_dims = raw_actor_hidden
-        # if not actor_hidden_dims:
-        #     actor_hidden_dims = [512, 256, 128]
-
-        # raw_critic_hidden = kwargs.pop("critic_hidden_dims", [512, 256, 128])
-        # if isinstance(raw_critic_hidden, dict):
-        #     critic_hidden_dims = raw_critic_hidden.get("units", [])
-        # else:
-        #     critic_hidden_dims = raw_critic_hidden
-        # if not critic_hidden_dims:
-        #     critic_hidden_dims = [512, 256, 128]
+        
 
         raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
         if isinstance(raw_init_noise_std, dict):
@@ -101,24 +81,18 @@ class MoEActorCritic(ActorCritic):
         else:
             init_noise_std = raw_init_noise_std
 
-        # obs_groups = kwargs.pop("obs_groups", {
-        #     "policy": ["policy"],
-        #     "critic": ["policy"],
-        # })
+
 
         actor_obs_norm = bool(kwargs.pop("actor_obs_normalization", True))
         critic_obs_norm = bool(kwargs.pop("critic_obs_normalization", True))
 
-        # print(f"actor_obs_normalization: {actor_obs_norm}")
-        # print(f"critic_obs_normalization: {critic_obs_norm}")
-        # assert False, "Check actor_obs_normalization and critic_obs_normalization values"
         super().__init__(
             num_actor_obs,
             num_critic_obs,
             num_actions,
             activation=activation,
-            actor_hidden_dims=actor_hidden_dims,
-            critic_hidden_dims=critic_hidden_dims,
+            actor_hidden_dims=self.actor_hidden_dims,
+            critic_hidden_dims=self.critic_hidden_dims,
             actor_obs_normalization=actor_obs_norm,
             critic_obs_normalization=critic_obs_norm,
             init_noise_std=init_noise_std,
@@ -152,7 +126,7 @@ class MoEActorCritic(ActorCritic):
         input_dim = self.padded_dim
         # input_dim = self.padded_dim + self.observable_dim
 
-        for h in self.hidden_dim_moe:
+        for h in self.actor_hidden_dims:
             actor_layers.append(nn.Linear(input_dim, h))
             actor_layers.append(nn.ELU())
             input_dim = h
@@ -169,7 +143,7 @@ class MoEActorCritic(ActorCritic):
         # input_dim = self.padded_dim + self.observable_dim
         ########
         
-        for h in self.hidden_dim_moe:
+        for h in self.critic_hidden_dims:
             critic_layers.append(nn.Linear(input_dim, h))
             critic_layers.append(nn.ELU())
             input_dim = h

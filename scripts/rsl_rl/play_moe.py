@@ -175,7 +175,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Related parameters
     p = 1
     observable_dim = 32
-    act_dim = 9
+    act_dim = 12
 
     # extract the neural network module
     # we do this in a try-except to maintain backwards compatibility.
