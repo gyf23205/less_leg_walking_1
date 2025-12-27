@@ -14,6 +14,7 @@ from isaaclab.app import AppLauncher
 
 # local imports
 import cli_args  # isort: skip
+import torch.nn.functional as F  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
@@ -23,7 +24,8 @@ parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+# DEBUG
+parser.add_argument("--task", type=str, default="Less-Leg-Rough-Walking-Direct-v1", help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
@@ -34,6 +36,7 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+# parser = parser.add_argument("checkpoint", type=str, default="/home/yifan/git/less_leg_walking_1/logs/rsl_rl/less_leg_walking_rough/2025-12-21_22-32-25/model_1999.pt")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -60,6 +63,11 @@ import torch
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic
+import rsl_rl.runners.on_policy_runner
+# Inject the class so eval("MoEActorCritic") inside the runner can find it
+rsl_rl.runners.on_policy_runner.ResActorCritic = ResActorCritic
+
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -79,10 +87,6 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import less_leg_walking_1.tasks  # noqa: F401
 
-from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE import MoEActorCritic
-# Make the class available in the runner module's namespace
-import rsl_rl.runners.on_policy_runner as runner_module
-runner_module.MoEActorCritic = MoEActorCritic
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -105,6 +109,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    # assert False
     if args_cli.use_pretrained_checkpoint:
         resume_path = get_published_pretrained_checkpoint("rsl_rl", train_task_name)
         if not resume_path:
@@ -153,7 +158,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     runner.load(resume_path)
 
     # obtain the trained policy for inference
-    policy = runner.get_inference_policy(device=env.unwrapped.device)
+    policy_res = runner.get_inference_policy(device=env.unwrapped.device)
 
     # extract the neural network module
     # we do this in a try-except to maintain backwards compatibility.
@@ -164,20 +169,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # version 2.2 and below
         policy_nn = runner.alg.actor_critic
 
-    # extract the normalizer
+    # disable normalizers to avoid 226->256 mismatch during play
+    # Note: 'policy' is a bound method, so we must modify 'policy_nn' (the module)
     if hasattr(policy_nn, "actor_obs_normalizer"):
-        normalizer = policy_nn.actor_obs_normalizer
-    elif hasattr(policy_nn, "student_obs_normalizer"):
-        normalizer = policy_nn.student_obs_normalizer
-    else:
-        normalizer = None
+        policy_nn.actor_obs_normalizer = torch.nn.Identity()
+    if hasattr(policy_nn, "critic_obs_normalizer"):
+        policy_nn.critic_obs_normalizer = torch.nn.Identity()
+    if hasattr(policy_nn, "student_obs_normalizer"):
+        policy_nn.student_obs_normalizer = torch.nn.Identity()
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
+    # normalizer expects 226-D but we pad to 256; skip it to avoid shape mismatch
+    export_policy_as_jit(policy_nn, normalizer=None, path=export_model_dir, filename="policy.pt")
+    export_policy_as_onnx(policy_nn, normalizer=None, path=export_model_dir, filename="policy.onnx")
 
     dt = env.unwrapped.step_dt
+
+    # Load the orignal policy model
+    original_policy_path = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
+    policy_original = torch.load(original_policy_path, map_location=env.unwrapped.device, weights_only=False)["actor"]
 
     # reset environment
     obs = env.get_observations()
@@ -187,8 +198,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            # agent stepping
-            actions = policy(obs)
+            action_original = policy_original(obs["policy"])
+            res = policy_res(obs)
+            actions = action_original + res
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:
