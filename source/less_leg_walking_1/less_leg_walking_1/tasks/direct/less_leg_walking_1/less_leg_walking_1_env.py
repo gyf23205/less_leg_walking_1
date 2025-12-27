@@ -24,7 +24,7 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         # Joint position command (deviation from default joint positions)
         # Modified for 3 legs: 9 joints instead of 12
-        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        # self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self._previous_actions = torch.zeros(
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
@@ -96,6 +96,11 @@ class LessLegWalkingEnv(DirectRLEnv):
         
         self._processed_actions = self.cfg.action_scale * full_actions + self._robot.data.default_joint_pos
 
+        full_action_for_KAE = full_actions
+        full_action_for_KAE[:, [2, 6, 10]] = actions[:,9:12]
+        self.full_action_for_KAE = full_action_for_KAE
+        ####### SHOULDN'T I SUPPOSE TO SOME HOW GENERATE FULL CONTROL INPUT AND FEED IT INTO KAE?
+
     def _apply_action(self):
         self._robot.set_joint_position_target(self._processed_actions)
 
@@ -113,8 +118,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         joint_indices = torch.tensor([0, 4, 8, 1, 5, 9, 3, 7, 11], device=self.device)
         
         # Extract joint data for active legs only
-        joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
-        joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
+        # joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
+        # joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
         
         # obs = torch.cat(
         #     [
@@ -134,8 +139,9 @@ class LessLegWalkingEnv(DirectRLEnv):
         #     dim=-1,
         # )
 
-        augmented_action = torch.nn.functional.pad(self._actions, (0,3), mode="constant", value = 0) # padding non_active input as 0
-        # print(augmented_action.size())
+        # augmented_action = torch.nn.functional.pad(self._actions, (0,3), mode="constant", value = 0) # padding non_active input as 0
+        augmented_action = self.full_action_for_KAE
+        print(augmented_action.size())
 
         obs = torch.cat(
             [
@@ -158,7 +164,7 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         observations = {"policy": obs}
 
-        # print(observations["policy"].size())
+        print(observations["policy"].size())
         # temp_a = self._robot.data.joint_pos
         # print("_robot.data.joint_pos: ", temp_a.size())
         # print("joint_pos_active", joint_pos_active.size())
