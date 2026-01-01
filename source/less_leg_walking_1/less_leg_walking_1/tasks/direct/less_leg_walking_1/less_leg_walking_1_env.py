@@ -24,7 +24,8 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         # Joint position command (deviation from default joint positions)
         # Modified for 3 legs: 9 joints instead of 12
-        # self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        self.full_action_for_KAE = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self._previous_actions = torch.zeros(
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
@@ -141,7 +142,7 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         # augmented_action = torch.nn.functional.pad(self._actions, (0,3), mode="constant", value = 0) # padding non_active input as 0
         augmented_action = self.full_action_for_KAE
-        print(augmented_action.size())
+        # print(augmented_action.size())
 
         obs = torch.cat(
             [
@@ -164,7 +165,7 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         observations = {"policy": obs}
 
-        print(observations["policy"].size())
+        # print(observations["policy"].size())
         # temp_a = self._robot.data.joint_pos
         # print("_robot.data.joint_pos: ", temp_a.size())
         # print("joint_pos_active", joint_pos_active.size())
