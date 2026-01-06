@@ -202,6 +202,10 @@ class MoEActorCritic(ActorCritic):
         return normalized_obs
 
     def forward(self, obs):
+        ###### assert dim obs = 235 [P1]
+###############################################################
+
+
         padded_obs = self._prep_obs(obs)
         # # Record the maximum range of the padded observations on every channel among all batches
         # obs_range_temp = [(padded_obs[..., i].min().item(), padded_obs[..., i].max().item()) for i in range(padded_obs.shape[-1])]
@@ -253,6 +257,7 @@ class MoEActorCritic(ActorCritic):
         self._action_mean = mu
         self._action_std = sigma
         self.distribution = torch.distributions.Normal(mu,sigma)
+
         # print(self._cached_mu.requires_grad, self._cached_sigma.requires_grad, flush=True)
 
     def evaluate(self, obs, actions=None, masks=None, hidden_states=None):

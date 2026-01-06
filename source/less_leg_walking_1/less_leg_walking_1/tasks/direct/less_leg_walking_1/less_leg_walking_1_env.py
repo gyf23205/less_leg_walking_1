@@ -87,6 +87,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Joint order in ANYmal: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
         # Our 9-action order: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
         
+
+        #######[P4] IS THIS CORRECT ORDER??????? - highly likely actions order is not correct
         # LF leg: actions[0:3] -> full_actions[0, 4, 8]
         full_actions[:, [0, 4, 8]] = actions[:, 0:3]
         # LH leg: actions[3:6] -> full_actions[1, 5, 9]  
@@ -156,7 +158,7 @@ class LessLegWalkingEnv(DirectRLEnv):
                     self._robot.data.joint_vel,
                     height_data,
                     # self._actions,
-                    augmented_action,
+                    augmented_action, # <- this shape [P2]
                 )
                 if tensor is not None
             ],
