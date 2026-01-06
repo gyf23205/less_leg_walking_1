@@ -137,24 +137,6 @@ class MoEActorCritic(ActorCritic):
         actor_layers.append(nn.Linear(input_dim, self.observable_dim+self.act_dim))  # weights for experts
         ########
         self.actor = nn.Sequential(*actor_layers)
-        
-        # Define critic network (value head)
-        critic_layers = []
-
-        ########
-        num_critic_obs = 0
-        for obs_group in obs_groups["critic"]:
-            assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
-            num_critic_obs += obs[obs_group].shape[-1]
-        input_dim = num_critic_obs
-        ########
-        
-        for h in self.critic_hidden_dims:
-            critic_layers.append(nn.Linear(input_dim, h))
-            critic_layers.append(nn.ELU())
-            input_dim = h
-        critic_layers.append(nn.Linear(input_dim, 1))  # Single value output
-        self.critic = nn.Sequential(*critic_layers)
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
