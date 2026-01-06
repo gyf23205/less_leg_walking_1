@@ -7,43 +7,30 @@ from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
-# import sys, os
-# current_dir = os.path.dirname(os.path.abspath(__file__))
-# parent_dir = os.path.dirname(current_dir)
-# sys.path.append(parent_dir)
-
 # ############################################
 # # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-# from res_net import ResCfg, ResActorCritic  # Import ResActorCritic
+# from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
 # # USE THIS FOR MoE
-# # from MoE import MoECfg, MoEActorCritic  # Import both
+from ..MoE import MoECfg, MoEActorCritic  # Import both
 # ############################################
 
-# from ..MoE import MoECfg, MoEActorCritic  # Import both
-from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
 @configclass
 class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 2000  # Increased for more training
     save_interval = 50
-    experiment_name = "less_leg_walking_flat"
+    # experiment_name = "less_leg_walking_flat"
+    experiment_name = "MoE_less_leg_walking_flat"
     empirical_normalization = False
 
-
-    # policy = RslRlPpoActorCriticCfg(
-    #     init_noise_std=1.0,
-    #     actor_hidden_dims=[512, 256, 128],
-    #     critic_hidden_dims=[512, 256, 128],
-    #     activation="elu",
-    # )
     ############################################
     # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-    policy = ResCfg()
+    # policy = ResCfg()
 
     # USE THIS FOR MoE
-    # policy = MoECfg()
+    policy = MoECfg()
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(

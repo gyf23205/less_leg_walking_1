@@ -113,12 +113,12 @@ class LessLegWalkingEnv(DirectRLEnv):
                 self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
             ).clip(-1.0, 1.0)
         
-        # Get joint positions and velocities for only the 3 active legs
-        # Joint order in robot: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
-        # We want: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
-        joint_indices = torch.tensor([0, 4, 8, 1, 5, 9, 3, 7, 11], device=self.device)
+        # # Get joint positions and velocities for only the 3 active legs
+        # # Joint order in robot: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
+        # # We want: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
+        # joint_indices = torch.tensor([0, 4, 8, 1, 5, 9, 3, 7, 11], device=self.device)
         
-        # Extract joint data for active legs only
+        # # Extract joint data for active legs only
         # joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
         # joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
         
