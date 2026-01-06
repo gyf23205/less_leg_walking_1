@@ -3,6 +3,14 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+######
+## YOU NEED TO SET 
+# 1. rsl_rl_ppo_cfg.py - To import and use ResCfg
+
+# And modify
+# 1. augmented action - what shape?
+
+
 import sys
 sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
 
@@ -57,6 +65,12 @@ import importlib.metadata as metadata
 import platform
 
 from packaging import version
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic
+# # Make the class available in the runner module's namespace
+import rsl_rl.runners.on_policy_runner as runner_module
+runner_module.ResActorCritic = ResActorCritic
+
+
 
 # check minimum supported rsl-rl version
 RSL_RL_VERSION = "3.0.1"

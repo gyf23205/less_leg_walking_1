@@ -25,6 +25,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Joint position command (deviation from default joint positions)
         # Modified for 3 legs: 9 joints instead of 12
         self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        self.full_action_for_KAE = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self._previous_actions = torch.zeros(
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
@@ -62,7 +63,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
         # if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
-        # we add a height scanner for perceptive locomotion
+        #     # we add a height scanner for perceptive locomotion
         self._height_scanner = RayCaster(self.cfg.height_scanner)
         self.scene.sensors["height_scanner"] = self._height_scanner
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
@@ -86,6 +87,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Joint order in ANYmal: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
         # Our 9-action order: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
         
+
+        #######[P4] IS THIS CORRECT ORDER??????? - highly likely actions order is not correct
         # LF leg: actions[0:3] -> full_actions[0, 4, 8]
         full_actions[:, [0, 4, 8]] = actions[:, 0:3]
         # LH leg: actions[3:6] -> full_actions[1, 5, 9]  
@@ -96,18 +99,22 @@ class LessLegWalkingEnv(DirectRLEnv):
         
         self._processed_actions = self.cfg.action_scale * full_actions + self._robot.data.default_joint_pos
 
+        full_action_for_KAE = full_actions
+        full_action_for_KAE[:, [2, 6, 10]] = actions[:,9:12]
+        self.full_action_for_KAE = full_action_for_KAE
+        ####### SHOULDN'T I SUPPOSE TO SOME HOW GENERATE FULL CONTROL INPUT AND FEED IT INTO KAE?
+
     def _apply_action(self):
         self._robot.set_joint_position_target(self._processed_actions)
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
         height_data = None
-        # if isinstance(self.cfg, LessLegWalkingRoughEnvCfg):
-        height_data = (
-            self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-        ).clip(-1.0, 1.0)
-
-        ###################### 226 dim observation ##########################
+        if isinstance(self.cfg, LessLegWalkingFlatEnvCfg):
+            height_data = (
+                self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+            ).clip(-1.0, 1.0)
+        
         # # Get joint positions and velocities for only the 3 active legs
         # # Joint order in robot: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
         # # We want: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
@@ -116,39 +123,58 @@ class LessLegWalkingEnv(DirectRLEnv):
         # # Extract joint data for active legs only
         # joint_pos_active = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)[:, joint_indices]
         # joint_vel_active = self._robot.data.joint_vel[:, joint_indices]
-        ####################################################
-
-        # Use full 12-joint state for observations (keep obs space intact)
-        joint_pos_full = (self._robot.data.joint_pos - self._robot.data.default_joint_pos)
-        joint_vel_full = self._robot.data.joint_vel
-
-        # Pad 9-D actions to 12-D for observation logging
-        padded_actions = torch.zeros(self.num_envs, 12, device=self.device)
-        padded_actions[:, [0, 4, 8]] = self._actions[:, 0:3]   # LF
-        padded_actions[:, [1, 5, 9]] = self._actions[:, 3:6]   # LH
-        padded_actions[:, [3, 7, 11]] = self._actions[:, 6:9]  # RH
         
+        # obs = torch.cat(
+        #     [
+        #         tensor
+        #         for tensor in (
+        #             self._robot.data.root_lin_vel_b,          # 3
+        #             self._robot.data.root_ang_vel_b,          # 3  
+        #             self._robot.data.projected_gravity_b,     # 3
+        #             self._commands,                           # 3
+        #             joint_pos_active,                        # 9 (reduced from 12)
+        #             joint_vel_active,                        # 9 (reduced from 12)
+        #             height_data,                              # 187 for rough terrain or None for flat
+        #             self._actions,                            # 9 (reduced from 12)
+        #         )
+        #         if tensor is not None
+        #     ],
+        #     dim=-1,
+        # )
+
+        # augmented_action = torch.nn.functional.pad(self._actions, (0,3), mode="constant", value = 0) # padding non_active input as 0
+        augmented_action = self.full_action_for_KAE
+        # print(augmented_action.size())
+
         obs = torch.cat(
             [
                 tensor
                 for tensor in (
-                    self._robot.data.root_lin_vel_b,          # 3
-                    self._robot.data.root_ang_vel_b,          # 3  
-                    self._robot.data.projected_gravity_b,     # 3
-                    self._commands,                           # 3
-                    # joint_pos_active,                        # 9 (reduced from 12)
-                    # joint_vel_active,                        # 9 (reduced from 12)
-                    joint_pos_full,                           # 12
-                    joint_vel_full,                           # 12
-                    height_data,                              # 187 for rough terrain or None for flat
-                    # self._actions,                            # 9 (reduced from 12)
-                    padded_actions,                           # 12
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_ang_vel_b,
+                    self._robot.data.projected_gravity_b,
+                    self._commands,
+                    self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+                    self._robot.data.joint_vel,
+                    height_data,
+                    # self._actions,
+                    augmented_action, # <- this shape [P2]
                 )
                 if tensor is not None
             ],
             dim=-1,
         )
+
         observations = {"policy": obs}
+
+        # print(observations["policy"].size())
+        # temp_a = self._robot.data.joint_pos
+        # print("_robot.data.joint_pos: ", temp_a.size())
+        # print("joint_pos_active", joint_pos_active.size())
+        # temp_b = self._robot.data.joint_vel
+        # print("_robot.data.joint_vel: ", temp_b.size())
+        # print("joint_vel_active: ", joint_vel_active.size())
+
         return observations
 
     def _get_rewards(self) -> torch.Tensor:

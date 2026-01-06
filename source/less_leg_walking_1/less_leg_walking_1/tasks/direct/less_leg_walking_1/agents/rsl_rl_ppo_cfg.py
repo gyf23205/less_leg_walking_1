@@ -6,9 +6,14 @@
 from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
-from ..MoE import MoECfg, MoEActorCritic  # Import both
+
+# ############################################
+# # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
 # from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
+# # USE THIS FOR MoE
+from ..MoE import MoECfg, MoEActorCritic  # Import both
+# ############################################
 
 
 @configclass
@@ -16,16 +21,18 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 2000  # Increased for more training
     save_interval = 50
-    experiment_name = "less_leg_walking_flat"
+    # experiment_name = "less_leg_walking_flat"
+    experiment_name = "MoE_less_leg_walking_flat"
     empirical_normalization = False
-    # policy = RslRlPpoActorCriticCfg(
-    #     init_noise_std=1.0,
-    #     actor_hidden_dims=[512, 256, 128],
-    #     critic_hidden_dims=[512, 256, 128],
-    #     activation="elu",
-    # )
+
+    ############################################
+    # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
     # policy = ResCfg()
+
+    # USE THIS FOR MoE
     policy = MoECfg()
+    ############################################
+
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,

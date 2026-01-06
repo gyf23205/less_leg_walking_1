@@ -5,10 +5,12 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
-    observable_dim: int = 32
+    observable_dim: int = 64
     actor_hidden_dims: list[int] = [512, 256, 128]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
+    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
+    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
+    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -200,6 +202,10 @@ class MoEActorCritic(ActorCritic):
         return normalized_obs
 
     def forward(self, obs):
+        ###### assert dim obs = 235 [P1]
+###############################################################
+
+
         padded_obs = self._prep_obs(obs)
         # # Record the maximum range of the padded observations on every channel among all batches
         # obs_range_temp = [(padded_obs[..., i].min().item(), padded_obs[..., i].max().item()) for i in range(padded_obs.shape[-1])]
@@ -214,7 +220,8 @@ class MoEActorCritic(ActorCritic):
 
             experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim*2), the last dimension is mean and std
         # print(f"experts_outputs shape: {experts_outputs.shape}")
-        extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
+            extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
+
 
         weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
         # print(f"weights shape: {weights.shape}")
@@ -224,6 +231,7 @@ class MoEActorCritic(ActorCritic):
         #######
         
         outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
+        # outputs = torch.sum(weights.view(-1, self.padd+self.act_dim, 1) * extended_experts_outputs, dim=1)
         # print(f"outputs shape: {outputs.shape}")
         mu = outputs[..., : self.act_dim]
         # print(f"mu shape: {mu.shape}")
@@ -249,6 +257,7 @@ class MoEActorCritic(ActorCritic):
         self._action_mean = mu
         self._action_std = sigma
         self.distribution = torch.distributions.Normal(mu,sigma)
+
         # print(self._cached_mu.requires_grad, self._cached_sigma.requires_grad, flush=True)
 
     def evaluate(self, obs, actions=None, masks=None, hidden_states=None):
