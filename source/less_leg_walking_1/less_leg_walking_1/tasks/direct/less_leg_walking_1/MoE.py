@@ -5,12 +5,12 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
-    observable_dim: int = 64
+    observable_dim: int = 32
     actor_hidden_dims: list[int] = [512, 256, 128]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
+    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
-    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
+    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -36,6 +36,7 @@ from .utils import get_experts_outputs, extend_experts_outputs
 from .Autoencoder import KoopmanAutoencoder_walk
 from torch.serialization import add_safe_globals
 from rsl_rl.modules import ActorCritic
+from torch.distributions import Normal
 try:
     from tensordict import TensorDictBase
 except ImportError:  # fallback if tensordict version differs
@@ -53,7 +54,7 @@ sys.modules.setdefault(
 )
 
 class MoEActorCritic(ActorCritic):
-    def __init__(self, num_actor_obs, num_critic_obs, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
+    def __init__(self, obs, obs_groups, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
         # DEBUG
         # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         # print(num_actor_obs)
@@ -89,8 +90,8 @@ class MoEActorCritic(ActorCritic):
         critic_obs_norm = bool(kwargs.pop("critic_obs_normalization", True))
 
         super().__init__(
-            num_actor_obs,
-            num_critic_obs,
+            obs,
+            obs_groups,
             num_actions,
             activation=activation,
             actor_hidden_dims=self.actor_hidden_dims,
@@ -141,8 +142,11 @@ class MoEActorCritic(ActorCritic):
         critic_layers = []
 
         ########
-        input_dim = self.padded_dim
-        # input_dim = self.padded_dim + self.observable_dim
+        num_critic_obs = 0
+        for obs_group in obs_groups["critic"]:
+            assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
+            num_critic_obs += obs[obs_group].shape[-1]
+        input_dim = num_critic_obs
         ########
         
         for h in self.critic_hidden_dims:
@@ -151,9 +155,6 @@ class MoEActorCritic(ActorCritic):
             input_dim = h
         critic_layers.append(nn.Linear(input_dim, 1))  # Single value output
         self.critic = nn.Sequential(*critic_layers)
-
-        self._cached_mu: torch.Tensor | None = None
-        self._cached_sigma: torch.Tensor | None = None
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -201,16 +202,11 @@ class MoEActorCritic(ActorCritic):
             return normalized_obs, raw_obs
         return normalized_obs
 
-    def forward(self, obs):
+    def forward(self, obs): # DEBUG Override all the functions that need actions.
         ###### assert dim obs = 235 [P1]
 ###############################################################
 
-
         padded_obs = self._prep_obs(obs)
-        # # Record the maximum range of the padded observations on every channel among all batches
-        # obs_range_temp = [(padded_obs[..., i].min().item(), padded_obs[..., i].max().item()) for i in range(padded_obs.shape[-1])]
-        # self.obs_range = [(min(self.obs_range[i][0], obs_range_temp[i][0]), max(self.obs_range[i][1], obs_range_temp[i][1])) for i in range(len(obs_range_temp))]
-      
         with torch.no_grad():  
             _, latent_z, _ = self.kae(padded_obs)
 
@@ -218,63 +214,35 @@ class MoEActorCritic(ActorCritic):
             if latent_z.ndim == 1:
                 latent_z = latent_z.unsqueeze(0)
 
-            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim*2), the last dimension is mean and std
-        # print(f"experts_outputs shape: {experts_outputs.shape}")
+            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim)
             extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
 
         weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
-        # print(f"weights shape: {weights.shape}")
-        #######
-        # weights = torch.softmax(weights, dim=-1)
-        # weights = torch.tanh(weights)
-        #######
         
         outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
-        # outputs = torch.sum(weights.view(-1, self.padd+self.act_dim, 1) * extended_experts_outputs, dim=1)
-        # print(f"outputs shape: {outputs.shape}")
-        mu = outputs[..., : self.act_dim]
-        # print(f"mu shape: {mu.shape}")
-        # assert False
-
-        # Clamp log-std to a safe range, then exponentiate and sanitize
-        log_std = torch.clamp(outputs[..., self.act_dim:], min=-20.0, max=2.0)
-        sigma = torch.exp(log_std)
-        sigma = torch.clamp(sigma, min=1e-5, max=5.0)
-        sigma = torch.where(torch.isfinite(sigma), sigma, torch.full_like(sigma, 1e-3))
-
-        value = self.critic(padded_obs)  # keep shape [B, 1]
-        return mu, sigma, value
-
-    def get_value(self, obs):
-        _, _, value = self.forward(obs)
-        return value  # [B, 1]
+        actions = outputs[..., : self.act_dim]
+        return actions
 
 
     def update_distribution(self, obs, masks=None, hidden_states=None):
         # Use your MoE forward to define the Gaussian policy
-        mu, sigma, _ = self.forward(obs)  # [B, act_dim]
-        self._action_mean = mu
-        self._action_std = sigma
-        self.distribution = torch.distributions.Normal(mu,sigma)
+        mean = self.forward(obs)  # [B, act_dim]
 
-        # print(self._cached_mu.requires_grad, self._cached_sigma.requires_grad, flush=True)
+        # compute standard deviation
+        if self.noise_std_type == "scalar":
+            std = self.std.expand_as(mean)
+        elif self.noise_std_type == "log":
+            std = torch.exp(self.log_std).expand_as(mean)
+        else:
+            raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
+        # create distribution
+        self.distribution = Normal(mean, std)
 
-    def evaluate(self, obs, actions=None, masks=None, hidden_states=None):
-        value = self.get_value(obs)
-        if actions is None:
-            return value
-
-        mu, sigma, _ = self.forward(obs)
-
-        dist = torch.distributions.Normal(mu, sigma)
-        log_prob = dist.log_prob(actions).sum(dim=-1)
-        entropy = dist.entropy().sum(dim=-1)
-
-        print(f"[DEBUG] Log probabilities: {log_prob.mean().item()}, Entropy: {entropy.mean().item()}")
-        print(f"[DEBUG] log_prob requires_grad: {log_prob.requires_grad}")
-
-        return value, log_prob, entropy
+    def act_inference(self, obs):
+        obs = self.get_actor_obs(obs)
+        obs = self.actor_obs_normalizer(obs)
+        return self.forward(obs)
 
     def _check_gradients_enabled(self):
         """Utility to check if gradients are enabled for model parameters."""

@@ -24,13 +24,11 @@ def extend_experts_outputs(experts_outputs, act_dim):
     eye = torch.eye(act_dim, dtype=experts_outputs.dtype, device=experts_outputs.device)
 
     # Make [B, act_dim, K] by tiling along batch and expert dims
-    extends = eye[:, :K] if K <= act_dim else eye.repeat_interleave((K + act_dim - 1) // act_dim, dim=1)[:, :K]
-    extends = extends.unsqueeze(0).expand(B, -1, -1)
-
+    # extends = eye[:, :K] if K <= act_dim else eye.repeat_interleave((K + act_dim - 1) // act_dim, dim=1)[:, :K]
+    extends = eye.unsqueeze(0).expand(B, -1, -1) # [B, act_dim, act_dim]
     # Concatenate along 2nd dim
-    extended_outputs = torch.cat([experts_outputs, extends], dim=1)
-
-    assert experts_outputs.shape[2] == act_dim*2, \
+    extended_outputs = torch.cat([experts_outputs, extends], dim=1) # [B, D + act_dim, K]
+    assert experts_outputs.shape[2] == act_dim, \
         "Last dimension must equal act_dim for identity extension."
     
     return extended_outputs
@@ -86,9 +84,9 @@ def get_experts_outputs(kae, z, p, act_dim, conjugate=False):
     # print(expert_outputs.shape)
     # assert False
 
-    output = expert_outputs[:, :act_dim*2, :].transpose(1, 2).real ########## [P3]
+    output = expert_outputs[:, :act_dim, :].transpose(1, 2).real ########## [P3]
 
-    return output.to(dtype=torch.float32, copy=False) # (Batch, observable_dim, act_dim*2), the last dimension is mean and std
+    return output.to(dtype=torch.float32, copy=False) # (Batch, observable_dim, act_dim)
 
 def compute_grad_norm(model):
     total_norm = 0.0
