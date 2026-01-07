@@ -23,6 +23,8 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 50
     # experiment_name = "less_leg_walking_flat"
     experiment_name = "MoE_less_leg_walking_flat"
+    # experiment_name = "Residual_less_leg_walking_flat"
+    # experiment_name = "Nominal_less_leg_walking_flat"
     empirical_normalization = False
 
     ############################################

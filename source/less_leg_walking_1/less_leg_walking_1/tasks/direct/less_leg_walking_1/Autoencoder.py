@@ -54,19 +54,23 @@ class KoopmanAutoencoder_walk(nn.Module):
         return x_hat, z, y_hat
         
     def compute_koopman_operator(self, latent_X, latent_Y,device):
-        # # print(latent_X.shape, latent_Y.shape)
+        # # # print(latent_X.shape, latent_Y.shape)
+        # # latent_X = latent_X.view(-1, latent_X.size(-1))  # [N, d]
+        # # latent_Y = latent_Y.view(-1, latent_Y.size(-1))  # [N, d]
+
+        # # X_pseudo_inv = torch.linalg.pinv(latent_X.T)  # Compute pseudo-inverse of latent_X
+        # # # self.K = torch.matmul(latent_Y.T, X_pseudo_inv.T).to(device)  # K = Y * X^+
+        # # self.K = (latent_Y.T @ X_pseudo_inv).to(device)
+        # # # print(self.K.shape)
+
         # latent_X = latent_X.view(-1, latent_X.size(-1))  # [N, d]
+        # latent_X = latent_X.T # [d, N]
         # latent_Y = latent_Y.view(-1, latent_Y.size(-1))  # [N, d]
-
-        # X_pseudo_inv = torch.linalg.pinv(latent_X.T)  # Compute pseudo-inverse of latent_X
-        # # self.K = torch.matmul(latent_Y.T, X_pseudo_inv.T).to(device)  # K = Y * X^+
-        # self.K = (latent_Y.T @ X_pseudo_inv).to(device)
-        # # print(self.K.shape)
-
+        # latent_Y = latent_Y.T
+        # # X_pseudo_inv = torch.linalg.pinv(latent_X.T)  # Compute pseudo-inverse of latent_X
+        # # self.K = latent_Y.T @ X_pseudo_inv
+        # self.K = latent_Y @ torch.linalg.pinv(latent_X, rcond=1e-5)
         latent_X = latent_X.view(-1, latent_X.size(-1))  # [N, d]
-        latent_X = latent_X.T # [d, N]
         latent_Y = latent_Y.view(-1, latent_Y.size(-1))  # [N, d]
-        latent_Y = latent_Y.T
-        # X_pseudo_inv = torch.linalg.pinv(latent_X.T)  # Compute pseudo-inverse of latent_X
-        # self.K = latent_Y.T @ X_pseudo_inv
-        self.K = latent_Y @ torch.linalg.pinv(latent_X, rcond=1e-5)
+        X_pseudo_inv = torch.linalg.pinv(latent_X.T)  # Compute pseudo-inverse of latent_X
+        self.K = latent_Y.T @ X_pseudo_inv

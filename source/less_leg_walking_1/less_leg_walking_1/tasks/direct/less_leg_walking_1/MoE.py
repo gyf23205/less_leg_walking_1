@@ -5,13 +5,14 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
-    observable_dim: int = 64
+    observable_dim: int = 32
     actor_hidden_dims: list[int] = [512, 256, 128]
+    # actor_hidden_dims: list[int] = [256, 128, 64]
     critic_hidden_dims: list[int] = [512, 256, 128]
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
-    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
+    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv32.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -127,8 +128,9 @@ class MoEActorCritic(ActorCritic):
         actor_layers = []
 
         ########
-        input_dim = self.padded_dim
-        # input_dim = self.padded_dim + self.observable_dim
+        # input_dim = self.padded_dim
+        input_dim = 235
+        # input_dim = self.observable_dim
 
         for h in self.actor_hidden_dims:
             actor_layers.append(nn.Linear(input_dim, h))
@@ -202,7 +204,8 @@ class MoEActorCritic(ActorCritic):
             extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
 
-        weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
+        # weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
+        weights = self.actor(obs)
         
         outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
         actions = outputs[..., : self.act_dim]
