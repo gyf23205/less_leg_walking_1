@@ -88,7 +88,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Our 9-action order: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
         
 
-        #######[P4] IS THIS CORRECT ORDER??????? - highly likely actions order is not correct
+        # #######[P4] IS THIS CORRECT ORDER??????? - highly likely actions order is not correct
         # LF leg: actions[0:3] -> full_actions[0, 4, 8]
         full_actions[:, [0, 4, 8]] = actions[:, 0:3]
         # LH leg: actions[3:6] -> full_actions[1, 5, 9]  
@@ -96,13 +96,22 @@ class LessLegWalkingEnv(DirectRLEnv):
         # RH leg: actions[6:9] -> full_actions[3, 7, 11]
         full_actions[:, [3, 7, 11]] = actions[:, 6:9]
         # RF leg: full_actions[2, 6, 10] remain as zero (disabled)
-        
         self._processed_actions = self.cfg.action_scale * full_actions + self._robot.data.default_joint_pos
 
         full_action_for_KAE = full_actions
         full_action_for_KAE[:, [2, 6, 10]] = actions[:,9:12]
         self.full_action_for_KAE = full_action_for_KAE
-        ####### SHOULDN'T I SUPPOSE TO SOME HOW GENERATE FULL CONTROL INPUT AND FEED IT INTO KAE?
+        # ####### SHOULDN'T I SUPPOSE TO SOME HOW GENERATE FULL CONTROL INPUT AND FEED IT INTO KAE?
+
+        #######
+        # full_actions = actions
+        # full_actions[:, [2, 6, 10]] = torch.zeros(self.num_envs, 3, device=self.device)
+        # # RF leg: full_actions[2, 6, 10] remain as zero (disabled)
+        # self._processed_actions = self.cfg.action_scale * full_actions + self._robot.data.default_joint_pos
+
+        # full_action_for_KAE = actions
+        # self.full_action_for_KAE = full_action_for_KAE
+        ####### 
 
     def _apply_action(self):
         self._robot.set_joint_position_target(self._processed_actions)
