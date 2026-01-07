@@ -187,7 +187,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dt = env.unwrapped.step_dt
 
     # Load the orignal policy model
-    original_policy_path = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
+    # original_policy_path = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
+    original_policy_path = "/home/joonwon/github/Koopman_decompose_ext/KAE/results/walking_policy_new.pth"
     policy_original = torch.load(original_policy_path, map_location=env.unwrapped.device, weights_only=False)["actor"]
 
     # reset environment
