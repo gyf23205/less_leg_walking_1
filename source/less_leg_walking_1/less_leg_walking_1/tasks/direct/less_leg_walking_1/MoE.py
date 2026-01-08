@@ -9,10 +9,10 @@ class MoECfg(RslRlPpoActorCriticCfg):
     actor_hidden_dims: list[int] = [512, 256, 128]
     # actor_hidden_dims: list[int] = [256, 128, 64]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
+    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
-    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
+    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -78,6 +78,17 @@ class MoEActorCritic(ActorCritic):
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p')
         activation = kwargs.pop("activation")
+
+        # get the observation dimensions
+        self.obs_groups = obs_groups
+        self.num_actor_obs = 0
+        for obs_group in obs_groups["policy"]:
+            assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
+            self.num_actor_obs += obs[obs_group].shape[-1]
+        self.num_critic_obs = 0
+        for obs_group in obs_groups["critic"]:
+            assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
+            self.num_critic_obs += obs[obs_group].shape[-1]
         
 
         raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
@@ -128,7 +139,7 @@ class MoEActorCritic(ActorCritic):
 
         ########
         # input_dim = self.padded_dim
-        input_dim = 235
+        input_dim = self.num_actor_obs
         # input_dim = self.observable_dim
 
         for h in self.actor_hidden_dims:
