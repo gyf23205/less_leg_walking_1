@@ -204,6 +204,9 @@ class MoEActorCritic(ActorCritic):
             extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
 
+        # print(experts_outputs.shape)
+        # print(extended_experts_outputs.size())
+        
         # weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
         weights = self.actor(obs)
         
