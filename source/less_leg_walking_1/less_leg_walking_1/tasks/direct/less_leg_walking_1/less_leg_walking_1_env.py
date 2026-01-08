@@ -81,36 +81,32 @@ class LessLegWalkingEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
         # Create full 12-joint action vector with zeros for the disabled RF leg
-        full_actions = torch.zeros(self.num_envs, 12, device=self.device)
-        
-        # Map 9 actions to the 3 active legs (LF, LH, RH)
-        # Joint order in ANYmal: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']
-        # Our 9-action order: [LF_HAA, LF_HFE, LF_KFE, LH_HAA, LH_HFE, LH_KFE, RH_HAA, RH_HFE, RH_KFE]
-        
+        # print("--- CONTROL INPUT MAPPING ---")
+        # for i, name in enumerate(self._robot.data.joint_names):
+        #     print(f"Index {i}: {name}")        
+        # Joint order in ANYmalC: ['LF_HAA', 'LH_HAA', 'RF_HAA', 'RH_HAA', 'LF_HFE', 'LH_HFE', 'RF_HFE', 'RH_HFE', 'LF_KFE', 'LH_KFE', 'RF_KFE', 'RH_KFE']        
+        #                             0         1          2         3         4         5         6         7         8         9        10        11
 
-        # #######[P4] IS THIS CORRECT ORDER??????? - highly likely actions order is not correct
-        # LF leg: actions[0:3] -> full_actions[0, 4, 8]
-        full_actions[:, [0, 4, 8]] = actions[:, 0:3]
-        # LH leg: actions[3:6] -> full_actions[1, 5, 9]  
-        full_actions[:, [1, 5, 9]] = actions[:, 3:6]
-        # RH leg: actions[6:9] -> full_actions[3, 7, 11]
-        full_actions[:, [3, 7, 11]] = actions[:, 6:9]
-        # RF leg: full_actions[2, 6, 10] remain as zero (disabled)
-        self._processed_actions = self.cfg.action_scale * full_actions + self._robot.data.default_joint_pos
+        # # #######[P4] IS THIS CORRECT ORDER??????? - highly likely actions order is not correct
+        # full_actions = torch.zeros(self.num_envs, 12, device=self.device)
 
-        full_action_for_KAE = full_actions
-        full_action_for_KAE[:, [2, 6, 10]] = actions[:,9:12]
-        self.full_action_for_KAE = full_action_for_KAE
-        # ####### SHOULDN'T I SUPPOSE TO SOME HOW GENERATE FULL CONTROL INPUT AND FEED IT INTO KAE?
-
-        #######
-        # full_actions = actions
-        # full_actions[:, [2, 6, 10]] = torch.zeros(self.num_envs, 3, device=self.device)
+        # # LF leg: actions[0:3] -> full_actions[0, 4, 8]
+        # full_actions[:, [0, 4, 8]] = actions[:, 0:3]
+        # # LH leg: actions[3:6] -> full_actions[1, 5, 9]  
+        # full_actions[:, [1, 5, 9]] = actions[:, 3:6]
+        # # RH leg: actions[6:9] -> full_actions[3, 7, 11]
+        # full_actions[:, [3, 7, 11]] = actions[:, 6:9]
         # # RF leg: full_actions[2, 6, 10] remain as zero (disabled)
         # self._processed_actions = self.cfg.action_scale * full_actions + self._robot.data.default_joint_pos
 
-        # full_action_for_KAE = actions
+        # full_action_for_KAE = full_actions
+        # full_action_for_KAE[:, [2, 6, 10]] = actions[:,9:12]
         # self.full_action_for_KAE = full_action_for_KAE
+        # # # ####### SHOULDN'T I SUPPOSE TO SOME HOW GENERATE FULL CONTROL INPUT AND FEED IT INTO KAE?
+        
+        self._actions[:, [2, 6, 10]] = 0.0
+        self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
+        self.full_action_for_KAE = actions.clone()
         ####### 
 
     def _apply_action(self):
@@ -151,9 +147,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         #     dim=-1,
         # )
 
-        # augmented_action = torch.nn.functional.pad(self._actions, (0,3), mode="constant", value = 0) # padding non_active input as 0
-        augmented_action = self.full_action_for_KAE
-        # print(augmented_action.size())
+        augmented_action = self.full_action_for_KAE # !!! augmented_actions != self._actions -- self._actions now has 0s for RF leg joints
+                                                    # and augmented_actions has original full 12-dim control input (not 0-ed)
 
         obs = torch.cat(
             [
@@ -167,7 +162,7 @@ class LessLegWalkingEnv(DirectRLEnv):
                     self._robot.data.joint_vel,
                     height_data,
                     # self._actions,
-                    augmented_action, # <- this shape [P2]
+                    augmented_action, # <- now it is simply (original) actions.clone()
                 )
                 if tensor is not None
             ],
