@@ -15,8 +15,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     n_experts: int = 1
     p: int = 1
     class_name: str = "MoEActorCritic"
-    actor_obs_normalization: bool = True
-    critic_obs_normalization: bool = True
+    actor_obs_normalization: bool = False
+    critic_obs_normalization: bool = False
     activation: str = "elu"
     
     # Set explicitly (don't reference other fields)
@@ -121,8 +121,7 @@ class MoEActorCritic(ActorCritic):
         for param in self.kae.parameters():
             param.requires_grad = False
         
-        # DEBUG: why need to create actor and critic with Sequential but not directly using KAEAutoencoder_walk?
-        # Define trainable MoE layers for actor (outputs mean and std for actions)
+        # Define trainable MoE layers for actor
         actor_layers = []
 
         ########
@@ -187,7 +186,6 @@ class MoEActorCritic(ActorCritic):
     def forward(self, obs): # DEBUG Override all the functions that need actions.
         ###### assert dim obs = 235 [P1]
 ###############################################################
-
         padded_obs = self._prep_obs(obs)
         with torch.no_grad():  
             _, latent_z, _ = self.kae(padded_obs)
@@ -201,6 +199,8 @@ class MoEActorCritic(ActorCritic):
 
 
         weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
+        # print(f"weights shape: {weights.shape}")
+        # assert False
         
         outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
         actions = outputs[..., : self.act_dim]

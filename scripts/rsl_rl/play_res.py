@@ -186,10 +186,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
-    # Load the orignal policy model
-    original_policy_path = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
-    policy_original = torch.load(original_policy_path, map_location=env.unwrapped.device, weights_only=False)["actor"]
-
     # reset environment
     obs = env.get_observations()
     timestep = 0
@@ -198,9 +194,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            action_original = policy_original(obs["policy"])
-            res = policy_res(obs)
-            actions = action_original + res
+            actions = policy_res(obs)
+            print(policy_res)
+            assert False
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:
