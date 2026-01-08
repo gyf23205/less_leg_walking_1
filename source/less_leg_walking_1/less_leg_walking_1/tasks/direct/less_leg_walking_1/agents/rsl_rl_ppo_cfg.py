@@ -9,10 +9,10 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 # ############################################
 # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-# from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
+from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
 # USE THIS FOR MoE
-from ..MoE import MoECfg, MoEActorCritic  # Import both
+# from ..MoE import MoECfg, MoEActorCritic  # Import both
 # ############################################
 
 
@@ -23,16 +23,16 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 50
     # experiment_name = "less_leg_walking_flat"
     # experiment_name = "MoE16_less_leg_walking_flat"
-    experiment_name = "Residual_less_leg_walking_flat"
-    # experiment_name = "Nominal_less_leg_walking_flat"
+    # experiment_name = "Residual_less_leg_walking_flat"
+    experiment_name = "Nominal_less_leg_walking_flat"
     empirical_normalization = False
 
     ############################################
     # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-    # policy = ResCfg()
+    policy = ResCfg()
 
     # USE THIS FOR MoE
-    policy = MoECfg()
+    # policy = MoECfg()
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
