@@ -71,6 +71,12 @@ from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
 
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic
+import rsl_rl.runners.on_policy_runner
+# Inject the class so eval("MoEActorCritic") inside the runner can find it
+rsl_rl.runners.on_policy_runner.ResActorCritic = ResActorCritic
+
+
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
 
 import isaaclab_tasks  # noqa: F401

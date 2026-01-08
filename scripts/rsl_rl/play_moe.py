@@ -170,8 +170,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # obtain the trained policy for inference
     policy = runner.get_inference_policy(device=env.unwrapped.device)
     # Load KAE model
-    kae = torch.load("/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/" \
-                    "tasks/direct/less_leg_walking_1/KAE_original_range.pth", map_location=env.unwrapped.device, weights_only=False)
+    # kae = torch.load("/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/" \
+    #                 "tasks/direct/less_leg_walking_1/KAE_original_range.pth", map_location=env.unwrapped.device, weights_only=False)
+    kae = torch.load("/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth", map_location=env.unwrapped.device, weights_only=False)
     # Related parameters
     p = 1
     observable_dim = 32

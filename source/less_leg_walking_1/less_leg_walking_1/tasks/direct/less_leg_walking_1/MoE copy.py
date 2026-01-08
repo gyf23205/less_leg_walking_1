@@ -62,7 +62,8 @@ class MoEActorCritic(ActorCritic):
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
         # self.kae_path = kwargs.pop('kae_path', "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth")
-        self.kae_path = kwargs.pop('kae_path', "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth")
+        # self.kae_path = kwargs.pop('kae_path', "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth")
+        self.kae_path = kwargs.pop('kae_path', "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth")
         self.device = kwargs.pop('device', "cuda")
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p', 1)
