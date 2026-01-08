@@ -8,10 +8,10 @@ from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
 # ############################################
-# # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
+# USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
 from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
-# # USE THIS FOR MoE
+# USE THIS FOR MoE
 # from ..MoE import MoECfg, MoEActorCritic  # Import both
 # ############################################
 

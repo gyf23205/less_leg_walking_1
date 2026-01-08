@@ -17,8 +17,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     n_experts: int = 1
     p: int = 1
     class_name: str = "MoEActorCritic"
-    actor_obs_normalization: bool = True
-    critic_obs_normalization: bool = True
+    actor_obs_normalization: bool = False
+    critic_obs_normalization: bool = False
     activation: str = "elu"
     
     # Set explicitly (don't reference other fields)
@@ -123,8 +123,7 @@ class MoEActorCritic(ActorCritic):
         for param in self.kae.parameters():
             param.requires_grad = False
         
-        # DEBUG: why need to create actor and critic with Sequential but not directly using KAEAutoencoder_walk?
-        # Define trainable MoE layers for actor (outputs mean and std for actions)
+        # Define trainable MoE layers for actor
         actor_layers = []
 
         ########

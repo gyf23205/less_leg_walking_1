@@ -218,21 +218,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # run everything in inference mode
         with torch.inference_mode():
             obs["policy"] = _pad_to_dim(obs["policy"], 256)
-            print(policy)
-            weights = policy(obs)
-            with torch.no_grad():  
-                _, latent_z, _ = kae(obs["policy"])
-
-                latent_z = latent_z.detach()
-                if latent_z.ndim == 1:
-                    latent_z = latent_z.unsqueeze(0)
-
-                experts_outputs = get_experts_outputs(kae, latent_z, p, act_dim)# (Batch, observable_dim, act_dim*2), the last dimension is mean and std
-            # print(f"experts_outputs shape: {experts_outputs.shape}")
-            extended_experts_outputs = extend_experts_outputs(experts_outputs, act_dim)
-            outputs = torch.sum(weights.view(-1, observable_dim+act_dim, 1) * extended_experts_outputs, dim=1)
-            # print(f"outputs shape: {outputs.shape}")
-            actions = outputs[..., : act_dim]
+            actions = policy(obs)          
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:
