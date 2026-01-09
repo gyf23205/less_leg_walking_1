@@ -65,10 +65,10 @@ import importlib.metadata as metadata
 import platform
 
 from packaging import version
-from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic
-# # Make the class available in the runner module's namespace
-import rsl_rl.runners.on_policy_runner as runner_module
-runner_module.ResActorCritic = ResActorCritic
+# from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic
+# # # Make the class available in the runner module's namespace
+# import rsl_rl.runners.on_policy_runner as runner_module
+# runner_module.ResActorCritic = ResActorCritic
 
 
 

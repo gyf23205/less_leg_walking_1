@@ -209,7 +209,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            obs["policy"] = _pad_to_dim(obs["policy"], 256)
+            # obs["policy"] = _pad_to_dim(obs["policy"], 256)
             actions = policy(obs)          
             # env stepping
             obs, _, _, _ = env.step(actions)
