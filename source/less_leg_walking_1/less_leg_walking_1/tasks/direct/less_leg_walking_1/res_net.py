@@ -6,8 +6,8 @@ class ResCfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     # raw_obs_dim: int = 226
     # hidden_dim_moe: list[int] = [512, 256, 128]
-    original_policy_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
-    # original_policy_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/results/walking_policy_new.pth"
+    # original_policy_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
+    original_policy_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/results/walking_policy_new.pth"
     obs_dim: int = 235
     device: str = "cuda"
     activation: str = "elu"

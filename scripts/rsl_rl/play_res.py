@@ -195,8 +195,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # run everything in inference mode
         with torch.inference_mode():
             actions = policy_res(obs)
-            print(policy_res)
-            assert False
+            # print(policy_res)
+            # assert False
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:

@@ -8,7 +8,7 @@ class MoECfg(RslRlPpoActorCriticCfg):
     observable_dim: int = 64
     hidden_dim_moe: list[int] = [512, 256, 128]
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/temp_new2.pth"
-    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
+    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
