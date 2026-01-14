@@ -6,8 +6,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    # actor_hidden_dims: list[int] = [512, 256, 128]
-    actor_hidden_dims: list[int] = [256, 128, 64]
+    actor_hidden_dims: list[int] = [512, 256, 128]
+    # actor_hidden_dims: list[int] = [256, 128, 64]
     critic_hidden_dims: list[int] = [512, 256, 128]
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
@@ -222,7 +222,9 @@ class MoEActorCritic(ActorCritic):
 
         # weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
         weights = self.actor(obs)
-        
+
+        self.last_moe_weights = weights.detach()  # Add this line
+
         if self.ext:
 
         # extended

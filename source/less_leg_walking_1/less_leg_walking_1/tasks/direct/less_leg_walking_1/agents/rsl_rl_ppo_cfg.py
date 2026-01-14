@@ -12,7 +12,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 # from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
 # USE THIS FOR MoE
-from ..MoE import MoECfg, MoEActorCritic  # Import both
+# from ..MoE import MoECfg, MoEActorCritic  # Import both
 
 # Comment all for scratch
 # ############################################
@@ -24,31 +24,32 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 2000  # Increased for more training
     save_interval = 50
     # experiment_name = "less_leg_walking_flat"
-    # experiment_name = "MoE16_less_leg_walking_flat"
-    experiment_name = "MoE16_small_less_leg_walking_flat"
+    # experiment_name = "MoE16_small_less_leg_walking_flat"
     # experiment_name = "MoE16_1e4rl_less_leg_walking_flat"
     # experiment_name = "MoE12_noext_less_leg_walking_flat"
     # experiment_name = "MoE12_1e4rl_less_leg_walking_flat"
     # experiment_name = "MoE32_less_leg_walking_flat"
     # experiment_name = "MoE12_less_leg_walking_flat"
+
+    # experiment_name = "MoE16_less_leg_walking_flat"
     # experiment_name = "Residual_less_leg_walking_flat"
-    # experiment_name = "Nominal_less_leg_walking_flat"
+    experiment_name = "Nominal_less_leg_walking_flat"
     empirical_normalization = False
 
     ############################################
-    # USE THIS FOR TRAIN_RESIDUAL
+    # # USE THIS FOR TRAIN_RESIDUAL
     # policy = ResCfg()
 
     # USE THIS FOR MoE
-    policy = MoECfg()
+    # policy = MoECfg()
 
-    # USE THIS FOR Scratch
-    # policy = RslRlPpoActorCriticCfg(
-    #     init_noise_std=1.0,
-    #     actor_hidden_dims=[512, 256, 128],
-    #     critic_hidden_dims=[512, 256, 128],
-    #     activation="elu",
-    # )
+    # # USE THIS FOR Scratch
+    policy = RslRlPpoActorCriticCfg(
+        init_noise_std=1.0,
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        activation="elu",
+    )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
