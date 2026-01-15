@@ -45,7 +45,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # USE THIS FOR MoE
     policy = MoECfg()
 
-    # # # USE THIS FOR Scratch
+    # # USE THIS FOR Scratch
     # policy = RslRlPpoActorCriticCfg(
     #     init_noise_std=1.0,
     #     actor_hidden_dims=[512, 256, 128],

@@ -58,6 +58,7 @@ class MoEActorCritic(ActorCritic):
     def __init__(self, obs, obs_groups, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
         self.ext = True
         self.n_experts = n_experts
+        self.training_steps = 0  # To track training steps for noise scheduling
        
         # Extract custom params from kwargs to avoid conflicts
         # self.raw_obs_dim = kwargs.pop('raw_obs_dim', 226)
@@ -86,7 +87,7 @@ class MoEActorCritic(ActorCritic):
             self.num_critic_obs += obs[obs_group].shape[-1]
         
 
-        raw_init_noise_std = kwargs.pop("init_noise_std", 1.5)
+        raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
         if isinstance(raw_init_noise_std, dict):
             init_noise_std = raw_init_noise_std.get("value", 0.8)
         else:
@@ -144,10 +145,28 @@ class MoEActorCritic(ActorCritic):
 
         if self.ext:
             actor_layers.append(nn.Linear(input_dim, self.observable_dim+self.act_dim))  # weights for experts
+            
         else:
             actor_layers.append(nn.Linear(input_dim, self.observable_dim)) 
         ########
         self.actor = nn.Sequential(*actor_layers)
+
+        # with torch.no_grad():
+            # final_layer = self.actor[-1]  # Last layer (Linear)
+            # # Initialize expert weights (first observable_dim outputs) with bias toward 1
+            # final_layer.bias[:self.observable_dim] = 1.0
+            # # Initialize identity weights (remaining outputs) to 0
+            # if self.ext:
+            #     final_layer.bias[self.observable_dim:] = 0.0
+
+    # Scale the weights so initial forward pass produces ~1.0 for experts
+        with torch.no_grad():
+            final_layer = self.actor[-1]
+            # Make weights smaller so outputs don't explode
+            final_layer.weight.data *= 0.1
+            final_layer.bias[:self.observable_dim] = 1.0
+            if self.ext:
+                final_layer.bias[self.observable_dim:] = 0.0
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -198,12 +217,13 @@ class MoEActorCritic(ActorCritic):
     def forward(self, obs): # DEBUG Override all the functions that need actions.
         
         temp = obs.size()
-        # print(temp[1])
-        # print(temp[1])
-        # print(temp[1])
-        # print(temp[1])
-
         assert temp[1]==235, "observation is not 235 dim"
+
+        if torch.isnan(obs).any() or torch.isinf(obs).any():
+            print(f"BAD INPUT obs detected!")
+            print(f"obs has NaN: {torch.isnan(obs).any()}")
+            print(f"obs has Inf: {torch.isinf(obs).any()}")
+            print(f"obs stats: min={obs.min()}, max={obs.max()}")   
 
         padded_obs = self._prep_obs(obs)
 
@@ -219,19 +239,28 @@ class MoEActorCritic(ActorCritic):
 
         weights = self.actor(obs)
 
+
+
+        if torch.isnan(weights).any():
+            print(f"Actor network output NaN!")
+            print(f"Actor network parameters have NaN: {any(torch.isnan(p).any() for p in self.actor.parameters())}")
+
         self.last_moe_weights = weights.detach()  # Add this line
 
         if self.ext:
-
         # extended
             outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
-
         else: 
         # nominal
             outputs = torch.sum(weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
+
         actions = outputs[..., : self.act_dim]
    
-
+        if torch.isnan(actions).any() or torch.isinf(actions).any():
+            print(f"BAD actions detected!")
+            print(f"weights: {weights}")
+            print(f"extended_experts_outputs sample: {extended_experts_outputs[0]}")
+    
         return actions
 
 
@@ -246,8 +275,26 @@ class MoEActorCritic(ActorCritic):
             std = torch.exp(self.log_std).expand_as(mean)
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
+        
+        # print(f"std stats: min={std.min()}, max={std.max()}, has_nan={torch.isnan(std).any()}")
+        # print(f"noise_std_type: {self.noise_std_type}")
+
         # create distribution
         self.distribution = Normal(mean, std)
+
+        # # Log gradients periodically during training updates
+        # if self.training and hasattr(self, 'training_steps') and self.training_steps % 100 == 0:
+        #     # Register a hook to log gradients after backward pass
+        #     if not hasattr(self, '_grad_hook_registered'):
+        #         def grad_hook(grad):
+        #             self._log_gradients_next = True
+        #             return grad
+        #         self.actor[-1].weight.register_hook(grad_hook)
+        #         self._grad_hook_registered = True
+            
+        #     if hasattr(self, '_log_gradients_next') and self._log_gradients_next:
+        #         self.log_gradient_stats()
+        #         self._log_gradients_next = False
 
     def act_inference(self, obs):
         obs = self.get_actor_obs(obs)
@@ -262,6 +309,9 @@ class MoEActorCritic(ActorCritic):
             else:
                 print(f"WARNING: Gradient disabled for: {name}")
 
+            if torch.isnan(param).any():
+                print(f"Parameter {name} has NaN!")
+
     def log_gradients(self):
         """Log the gradients of the model's parameters."""
         print("[DEBUG] Executing log_gradients for MoEActorCritic")
@@ -270,3 +320,46 @@ class MoEActorCritic(ActorCritic):
                 print(f"Gradient for {name}: {param.grad.norm().item()}")
             else:
                 print(f"Gradient for {name}: None (parameter is not updated)")
+
+    # def log_gradient_stats(self):
+    #     """Log gradient statistics for the final actor layer."""
+    #     final_layer = self.actor[-1]  # Last linear layer
+        
+    #     if final_layer.weight.grad is not None:
+    #         with torch.no_grad():
+    #             # Gradients for expert weight outputs (first observable_dim)
+    #             expert_grad = final_layer.weight.grad[:self.observable_dim, :]
+    #             expert_grad_norm = expert_grad.norm().item()
+    #             expert_grad_mean = expert_grad.abs().mean().item()
+                
+    #             # Gradients for identity weight outputs (remaining act_dim)
+    #             if self.ext:
+    #                 identity_grad = final_layer.weight.grad[self.observable_dim:, :]
+    #                 # Exclude RF leg dimensions (2, 6, 10)
+    #                 active_dims = [i for i in range(self.act_dim) if i not in [2, 6, 10]]
+    #                 identity_grad_active = identity_grad[active_dims, :]
+    #                 identity_grad_norm = identity_grad_active.norm().item()
+    #                 identity_grad_mean = identity_grad_active.abs().mean().item()
+    #             else:
+    #                 identity_grad_norm = 0.0
+    #                 identity_grad_mean = 0.0
+                
+    #             # Bias gradients
+    #             if final_layer.bias.grad is not None:
+    #                 expert_bias_grad = final_layer.bias.grad[:self.observable_dim]
+    #                 expert_bias_grad_mean = expert_bias_grad.abs().mean().item()
+                    
+    #                 if self.ext:
+    #                     identity_bias_grad = final_layer.bias.grad[self.observable_dim:]
+    #                     identity_bias_grad_active = identity_bias_grad[active_dims]
+    #                     identity_bias_grad_mean = identity_bias_grad_active.abs().mean().item()
+    #                 else:
+    #                     identity_bias_grad_mean = 0.0
+                
+    #             print(f"\n[Gradient Stats - Step {self.training_steps}]")
+    #             print(f"Expert weight grad - norm: {expert_grad_norm:.4f}, mean_abs: {expert_grad_mean:.6f}")
+    #             print(f"Identity weight grad - norm: {identity_grad_norm:.4f}, mean_abs: {identity_grad_mean:.6f}")
+    #             print(f"Expert bias grad mean_abs: {expert_bias_grad_mean:.6f}")
+    #             if self.ext:
+    #                 print(f"Identity bias grad mean_abs: {identity_bias_grad_mean:.6f}")
+    #             print(f"Expert/Identity gradient ratio: {expert_grad_mean / (identity_grad_mean + 1e-8):.2f}")
