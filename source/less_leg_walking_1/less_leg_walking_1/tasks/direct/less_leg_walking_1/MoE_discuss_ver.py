@@ -143,7 +143,7 @@ class MoEActorCritic(ActorCritic):
         # 2. Expert Weight Network (learns how to use KAE experts)
         expert_weight_layers = []
         input_dim = self.num_actor_obs
-        for h in [64, 32, 16]:
+        for h in [64, 32]:
             expert_weight_layers.append(nn.Linear(input_dim, h))
             expert_weight_layers.append(nn.ELU())
             input_dim = h
@@ -159,7 +159,7 @@ class MoEActorCritic(ActorCritic):
         # 3. Gating Network (learns when to trust KAE vs MLP)
         gating_layers = []
         input_dim = self.num_actor_obs
-        for h in [32, 16]:  # Smaller network for gating
+        for h in [64, 32]:  # Smaller network for gating
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
             input_dim = h
@@ -255,32 +255,11 @@ class MoEActorCritic(ActorCritic):
         kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
         
         # 3. Gating (trainable)
-        # gate_logit = self.gating_network(obs)
-        # gate = torch.sigmoid(gate_logit)
-
-        # 4. Blend
-        # actions = gate * kae_actions + (1 - gate) * mlp_actions
-
-        # === NEW: Normalize action magnitudes ===
-        # Normalize so both pathways have similar scale
-        kae_norm = kae_actions.norm(dim=1, keepdim=True) + 1e-8
-        mlp_norm = mlp_actions.norm(dim=1, keepdim=True) + 1e-8
-        
-        # Option A: Normalize both to unit vectors, then scale together
-        kae_actions_normalized = kae_actions / kae_norm
-        mlp_actions_normalized = mlp_actions / mlp_norm
-        
-        # 3. Gating
         gate_logit = self.gating_network(obs)
         gate = torch.sigmoid(gate_logit)
         
-        # 4. Blend normalized actions
-        blended_normalized = gate * kae_actions_normalized + (1 - gate) * mlp_actions_normalized
-        
-        # Re-scale using learned scale (average of both norms)
-        combined_scale = gate * kae_norm + (1 - gate) * mlp_norm
-        actions = blended_normalized * combined_scale
-        
+        # 4. Blend
+        actions = gate * kae_actions + (1 - gate) * mlp_actions
         
         # Store for logging
         self.last_moe_weights = expert_weights.detach()
@@ -290,22 +269,12 @@ class MoEActorCritic(ActorCritic):
         if self.training and self.training_steps % 100 == 0:
             with torch.no_grad():
                 print(f"\n[Step {self.training_steps}]")
-                print(f"Gate mean: {gate.mean().item():.3f}, std: {gate.std().item():.3f}")
-                print(f"Gate min: {gate.min().item():.3f}, max: {gate.max().item():.3f}")
-                
-                # Check if gate is saturated
-                high_gate_pct = (gate > 0.9).float().mean().item() * 100
-                low_gate_pct = (gate < 0.1).float().mean().item() * 100
-                print(f"Gate > 0.9: {high_gate_pct:.1f}%, Gate < 0.1: {low_gate_pct:.1f}%")
-                
+                print(f"Gate mean: {gate.mean().item():.3f} (1.0=KAE, 0.0=MLP)")
                 print(f"Expert weights - mean: {expert_weights.mean().item():.3f}, std: {expert_weights.std().item():.3f}")
                 
-                # Action norms
-                active_dims = [i for i in range(self.act_dim) if i not in [2, 6, 10]]
-                kae_norm = kae_actions[:, active_dims].norm(dim=1).mean().item()
-                mlp_norm = mlp_actions[:, active_dims].norm(dim=1).mean().item()
-                final_norm = actions[:, active_dims].norm(dim=1).mean().item()
-                print(f"Action norms - KAE: {kae_norm:.3f}, MLP: {mlp_norm:.3f}, Final: {final_norm:.3f}")
+                expert_per_dim = expert_weights.mean(dim=0)
+                top5_indices = expert_per_dim.topk(5).indices.tolist()
+                print(f"Top 5 experts: {top5_indices} -> {[f'{expert_per_dim[i].item():.3f}' for i in top5_indices]}")
         
         self.training_steps += 1
         
