@@ -5,13 +5,13 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
-    observable_dim: int = 64
+    observable_dim: int = 16
     actor_hidden_dims: list[int] = [512, 256, 128]
     # actor_hidden_dims: list[int] = [256, 128, 64]
     critic_hidden_dims: list[int] = [512, 256, 128]
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
-    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
+    kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -86,7 +86,7 @@ class MoEActorCritic(ActorCritic):
             self.num_critic_obs += obs[obs_group].shape[-1]
         
 
-        raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
+        raw_init_noise_std = kwargs.pop("init_noise_std", 1.5)
         if isinstance(raw_init_noise_std, dict):
             init_noise_std = raw_init_noise_std.get("value", 0.8)
         else:
@@ -207,8 +207,6 @@ class MoEActorCritic(ActorCritic):
 
         padded_obs = self._prep_obs(obs)
 
-
-        #######################################
         with torch.no_grad():  
             _, latent_z, _ = self.kae(padded_obs)
 
@@ -219,18 +217,6 @@ class MoEActorCritic(ActorCritic):
             experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim)
             extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
-        # _, latent_z, _ = self.kae(padded_obs)  # KAE params still frozen
-        # if latent_z.ndim == 1:
-        #     latent_z = latent_z.unsqueeze(0)
-
-        # experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)
-        # extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
-        #######################################
-
-        # print(experts_outputs.shape)
-        # print(extended_experts_outputs.size())
-
-        # weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
         weights = self.actor(obs)
 
         self.last_moe_weights = weights.detach()  # Add this line
@@ -244,6 +230,8 @@ class MoEActorCritic(ActorCritic):
         # nominal
             outputs = torch.sum(weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
         actions = outputs[..., : self.act_dim]
+   
+
         return actions
 
 
