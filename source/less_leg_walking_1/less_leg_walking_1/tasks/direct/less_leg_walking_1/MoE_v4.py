@@ -132,7 +132,7 @@ class MoEActorCritic(ActorCritic):
         
         # 1. MLP Network (learns 3-leg walking directly)
         mlp_layers = []
-        input_dim = self.num_actor_obs + self.act_dim
+        input_dim = self.num_actor_obs
         for h in self.actor_hidden_dims:
             mlp_layers.append(nn.Linear(input_dim, h))
             mlp_layers.append(nn.ELU())
@@ -241,7 +241,10 @@ class MoEActorCritic(ActorCritic):
 
         padded_obs = self._prep_obs(obs)
 
-        # 1. KAE pathway - compute first
+        # 1. MLP pathway (trainable)
+        mlp_actions = self.mlp_network(obs)
+        
+        # 2. KAE pathway (fixed experts + trainable weights)
         with torch.no_grad():
             _, latent_z, _ = self.kae(padded_obs)
             if latent_z.ndim == 1:
@@ -251,22 +254,52 @@ class MoEActorCritic(ActorCritic):
         expert_weights = self.expert_weight_network(obs)
         kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
         
-        # 2. MLP pathway - sees KAE's suggestion
-        # Concatenate obs + KAE actions as input
-        mlp_input = torch.cat([obs, kae_actions.detach()], dim=-1)  # [B, 235+12]
-        mlp_actions = self.mlp_network(mlp_input)
-        
-        # 3. Gate decides: trust KAE or MLP's interpretation
+        # # 3. Gating
         gate_logit = self.gating_network(obs)
         gate = torch.sigmoid(gate_logit)
         
-        # 4. Blend
+        # 4. Blend - that's it, nothing else
         actions = gate * kae_actions + (1 - gate) * mlp_actions
         
+        # Store for logging
         self.last_moe_weights = expert_weights.detach()
         self.last_gate = gate.detach()
+        
+        # Store for logging
+        self.last_moe_weights = expert_weights.detach()
+        self.last_gate = gate.detach()
+        
+        # Logging
+        if self.training and self.training_steps % 100 == 0:
+            with torch.no_grad():
+                print(f"\n[Step {self.training_steps}]")
+                print(f"Gate mean: {gate.mean().item():.3f}, std: {gate.std().item():.3f}")
+                print(f"Gate min: {gate.min().item():.3f}, max: {gate.max().item():.3f}")
+                
+                # Check if gate is saturated
+                high_gate_pct = (gate > 0.9).float().mean().item() * 100
+                low_gate_pct = (gate < 0.1).float().mean().item() * 100
+                print(f"Gate > 0.9: {high_gate_pct:.1f}%, Gate < 0.1: {low_gate_pct:.1f}%")
+                
+                print(f"Expert weights - mean: {expert_weights.mean().item():.3f}, std: {expert_weights.std().item():.3f}")
+                
+                # Action norms
+                active_dims = [i for i in range(self.act_dim) if i not in [2, 6, 10]]
+                kae_norm = kae_actions[:, active_dims].norm(dim=1).mean().item()
+                mlp_norm = mlp_actions[:, active_dims].norm(dim=1).mean().item()
+                final_norm = actions[:, active_dims].norm(dim=1).mean().item()
+                print(f"Action norms - KAE: {kae_norm:.3f}, MLP: {mlp_norm:.3f}, Final: {final_norm:.3f}")
+        
         self.training_steps += 1
-            
+        
+        actions = actions[..., :self.act_dim]
+        
+        if torch.isnan(actions).any() or torch.isinf(actions).any():
+            print(f"BAD actions detected!")
+            print(f"mlp_actions: {mlp_actions[0]}")
+            print(f"kae_actions: {kae_actions[0]}")
+            print(f"gate: {gate[0]}")
+    
         return actions
 
 
