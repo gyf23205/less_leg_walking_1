@@ -233,26 +233,26 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Give more reward for using KAE (observation-based skills)
         bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
 
-        # # DEBUG: Check if policy reference exists
-        if hasattr(self, '_policy_ref'):
+        # # # DEBUG: Check if policy reference exists
+        # if hasattr(self, '_policy_ref'):
 
-            moe_weights = self._policy_ref.last_moe_weights
-            # print(f"[DEBUG] Found last_moe_weights with shape: {moe_weights.shape}")
+        #     moe_weights = self._policy_ref.last_moe_weights
+        #     # print(f"[DEBUG] Found last_moe_weights with shape: {moe_weights.shape}")
             
-            # Calculate dimensions
-            total_dim = moe_weights.shape[1]
-            act_dim = self._actions.shape[1]
-            obv_dim = total_dim - act_dim
+        #     # Calculate dimensions
+        #     total_dim = moe_weights.shape[1]
+        #     act_dim = self._actions.shape[1]
+        #     obv_dim = total_dim - act_dim
             
-            if obv_dim > 0:
-                expert_weights_abs = torch.abs(moe_weights[:, :obv_dim])
+        #     if obv_dim > 0:
+        #         expert_weights_abs = torch.abs(moe_weights[:, :obv_dim])
 
-                # Entropy of expert weight distribution
-                weights_normalized = expert_weights_abs / (expert_weights_abs.sum(dim=1, keepdim=True) + 1e-8)
-                entropy = -(weights_normalized * torch.log(weights_normalized + 1e-8)).sum(dim=1)
+        #         # Entropy of expert weight distribution
+        #         weights_normalized = expert_weights_abs / (expert_weights_abs.sum(dim=1, keepdim=True) + 1e-8)
+        #         entropy = -(weights_normalized * torch.log(weights_normalized + 1e-8)).sum(dim=1)
 
-                scale = getattr(self.cfg, "bias_to_skill_reward_scale", 0.0)
-                bias_to_skill_reward = entropy * float(scale) * self.step_dt
+        #         scale = getattr(self.cfg, "bias_to_skill_reward_scale", 0.0)
+        #         bias_to_skill_reward = entropy * float(scale) * self.step_dt
 
                                  
         ########################################################################
