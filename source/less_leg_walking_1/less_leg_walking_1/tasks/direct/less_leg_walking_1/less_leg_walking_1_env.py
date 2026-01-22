@@ -30,6 +30,8 @@ class LessLegWalkingEnv(DirectRLEnv):
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
 
+        self._last_reward_mean = 0.0
+
         # X/Y linear velocity and yaw angular velocity commands
         self._commands = torch.zeros(self.num_envs, 3, device=self.device)
 
@@ -233,6 +235,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Give more reward for using KAE (observation-based skills)
         bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
 
+        # bias_to_skill_reward = self._policy_ref._last_diversity
+
         # # # DEBUG: Check if policy reference exists
         # if hasattr(self, '_policy_ref'):
 
@@ -272,7 +276,7 @@ class LessLegWalkingEnv(DirectRLEnv):
             "stability": stability * self.cfg.stability_reward_scale * self.step_dt,
             "forward_progress": forward_progress * self.cfg.forward_progress_reward_scale * self.step_dt,
 
-            "bias_to_skill": bias_to_skill_reward,
+            "bias_to_skill": self.cfg.bias_to_skill_reward_scale*bias_to_skill_reward * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -280,14 +284,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         for key, value in rewards.items():
             self._episode_sums[key] += value
 
-        reward_without_bias = reward - bias_to_skill_reward
-        
-        # IMPORTANT: We still use full reward (with bias) for training the policy gradient
-        # But we need to tell RSL-RL to log the version without bias
-        # Unfortunately, RSL-RL logs what we return, so we have a choice:
-        # Option A: Return reward WITH bias (better for training)
-        # Option B: Return reward WITHOUT bias (better for logging)
-        
+        reward_without_bias = reward - self.cfg.bias_to_skill_reward_scale * bias_to_skill_reward * self.step_dt
+                
         # Let's return the FULL reward for training, but track core separately
         if not hasattr(self, '_episode_core_reward'):
             self._episode_core_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -296,6 +294,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         
         self._episode_core_reward += reward_without_bias
         self._episode_full_reward += reward
+        self._last_reward_mean = reward.mean().item()
 
 
         return reward
