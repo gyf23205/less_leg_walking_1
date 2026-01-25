@@ -235,6 +235,12 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Give more reward for using KAE (observation-based skills)
         bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
 
+        # expert_weights = self._policy_ref.extras["expert_weights"]
+        # # Calculate L2 norm penalty: sum of squares of the weights
+        # l2_penalty = torch.sum(torch.square(expert_weights), dim=-1)
+        # bias_to_skill_reward = -l2_penalty # Negative sign to make it a penalty
+        # # --- END: MODIFIED SECTION -
+
         # bias_to_skill_reward = self._policy_ref._last_diversity
 
         # # # DEBUG: Check if policy reference exists

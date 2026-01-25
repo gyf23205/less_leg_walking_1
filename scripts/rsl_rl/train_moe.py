@@ -193,6 +193,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create runner from rsl-rl
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+
+        # original_update = runner.alg.update
+        # 
+        # def update_with_regularization():
+        #     # Call original update
+        #     mean_value_loss, mean_surrogate_loss, mean_kl, mean_entropy, mean_lr = original_update()
+            
+        #     # Add regularization loss and backprop
+        #     reg_loss = runner.alg.actor_critic.get_identity_regularization_loss()
+        #     if reg_loss.item() > 0:
+        #         runner.alg.actor_optimizer.zero_grad()
+        #         reg_loss.backward()
+        #         runner.alg.actor_optimizer.step()
+            
+        #     return mean_value_loss, mean_surrogate_loss, mean_kl, mean_entropy, mean_lr
+        
+        # runner.alg.update = update_with_regularization
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:

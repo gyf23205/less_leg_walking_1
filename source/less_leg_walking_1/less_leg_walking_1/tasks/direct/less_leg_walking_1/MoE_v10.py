@@ -85,7 +85,6 @@ class MoEActorCritic(ActorCritic):
         for obs_group in obs_groups["policy"]:
             assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
             self.num_actor_obs += obs[obs_group].shape[-1]
-
         self.num_critic_obs = 0
         for obs_group in obs_groups["critic"]:
             assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
@@ -132,8 +131,8 @@ class MoEActorCritic(ActorCritic):
 
        # 1. MLP Network (learns residual correction)
         mlp_layers = []
-        input_dim = self.num_actor_obs + self.act_dim
-        for h in [512, 256, 128]:
+        input_dim = self.num_actor_obs
+        for h in [128, 64, 32]:
             mlp_layers.append(nn.Linear(input_dim, h))
             mlp_layers.append(nn.ELU())
             input_dim = h
@@ -142,7 +141,7 @@ class MoEActorCritic(ActorCritic):
         
         # 2. Expert Weight Network (learns how to use KAE experts)
         expert_weight_layers = []
-        input_dim = self.num_actor_obs 
+        input_dim = self.num_actor_obs
         for h in [32]:
             expert_weight_layers.append(nn.Linear(input_dim, h))
             expert_weight_layers.append(nn.ELU())
@@ -158,7 +157,7 @@ class MoEActorCritic(ActorCritic):
         
         # 3. Gating Network (learns when to trust KAE vs MLP)
         gating_layers = []
-        input_dim = self.num_actor_obs + self.act_dim + self.act_dim
+        input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
         for h in [128, 64, 32]:
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
@@ -166,21 +165,12 @@ class MoEActorCritic(ActorCritic):
         gating_layers.append(nn.Linear(input_dim, 1))
         self.gating_network = nn.Sequential(*gating_layers)
 
-        # gradient_scale = 0.1
-        # for param in self.expert_weight_network.parameters():
-        #     param.register_hook(lambda grad: grad * gradient_scale)
-        # # --- END: NEW GRADIENT DAMPENING SECTION ---
-
-
         # Initialize the gate to strongly favor the KAE pathway at the start.
         # A large positive bias means sigmoid(logit) will be close to 1.0.
         with torch.no_grad():
             self.gating_network[-1].bias.data.fill_(1.0)
             # self.mlp_network[-1].weight.data.fill_(0.0)
             # self.mlp_network[-1].bias.data.fill_(0.0)
-
-        self._cached_mu: torch.Tensor | None = None
-        self._cached_sigma: torch.Tensor | None = None
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -229,8 +219,7 @@ class MoEActorCritic(ActorCritic):
         return normalized_obs
 
     def forward(self, obs): # DEBUG Override all the functions that need actions.
-
-        self.extras = {}
+        
         temp = obs.size()
         assert temp[1]==235, "observation is not 235 dim"
 
@@ -248,36 +237,20 @@ class MoEActorCritic(ActorCritic):
                 latent_z = latent_z.unsqueeze(0)
             experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [B, 16, 12]
         
-            if torch.isnan(experts_outputs).any() or torch.isinf(experts_outputs).any():
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-
-
-                # Replace bad values with a safe neutral value (zero).
-                experts_outputs = torch.nan_to_num(experts_outputs, nan=0.0, posinf=0.0, neginf=0.0)
-
-
         # Get weights for each KAE expert using the original, unnormalized 'obs'
         expert_weights = self.expert_weight_network(obs)
         kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
-        # self.extras['expert_weights'] = expert_weights
-
-        # 2. MLP
-        mlp_input = torch.cat([obs, kae_actions], dim=1)
-        mlp_actions = self.mlp_network(mlp_input)
         
-        # 3. Gate 
-        gating_input = torch.cat([obs, mlp_actions, kae_actions], dim=1)
+        # 2. MLP pathway (residual) - uses the original, unnormalized 'obs'
+        mlp_actions = self.mlp_network(obs)
+        
+        # 3. Gate decides blending - uses the original, unnormalized 'obs'
+        gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
         gate_logit = self.gating_network(gating_input)
         gate = torch.sigmoid(gate_logit)
         
         # 4. Blend the two pathways
-        actions = gate * kae_actions + (1-gate) * mlp_actions
-              
+        actions = kae_actions + gate * mlp_actions
             
             
         return actions
