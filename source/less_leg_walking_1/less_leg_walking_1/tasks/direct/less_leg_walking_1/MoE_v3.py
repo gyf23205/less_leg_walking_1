@@ -6,15 +6,12 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [128, 64, 32]
+    actor_hidden_dims: list[int] = [512, 256, 128]
     # actor_hidden_dims: list[int] = [256, 128, 64]
     critic_hidden_dims: list[int] = [512, 256, 128]
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
     kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_wtask_p1_pad256_obv16.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_wdist_p1_pad256_obv16_v2.pth"
-
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -77,7 +74,6 @@ class MoEActorCritic(ActorCritic):
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p')
         activation = kwargs.pop("activation")
-        self.identity_weight_decay = kwargs.pop('identity_weight_decay', 0.01)
 
         # get the observation dimensions
         self.obs_groups = obs_groups
@@ -85,17 +81,19 @@ class MoEActorCritic(ActorCritic):
         for obs_group in obs_groups["policy"]:
             assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
             self.num_actor_obs += obs[obs_group].shape[-1]
-
         self.num_critic_obs = 0
         for obs_group in obs_groups["critic"]:
             assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
             self.num_critic_obs += obs[obs_group].shape[-1]
         
+
         raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
         if isinstance(raw_init_noise_std, dict):
             init_noise_std = raw_init_noise_std.get("value", 0.8)
         else:
             init_noise_std = raw_init_noise_std
+
+
 
         actor_obs_norm = bool(kwargs.pop("actor_obs_normalization", True))
         critic_obs_norm = bool(kwargs.pop("critic_obs_normalization", True))
@@ -125,15 +123,17 @@ class MoEActorCritic(ActorCritic):
         self._use_actor_obs_norm = hasattr(self, "actor_obs_normalizer") and self.actor_obs_normalizer is not None
         self._use_critic_obs_norm = hasattr(self, "critic_obs_normalizer") and self.critic_obs_normalizer is not None
 
+        # remove self.distribution assignment
+
         # Load and freeze KAE
         self.kae = torch.load(self.kae_path, map_location=self.device, weights_only=False)
         for param in self.kae.parameters():
             param.requires_grad = False
-
-       # 1. MLP Network (learns residual correction)
+        
+        # 1. MLP Network (learns 3-leg walking directly)
         mlp_layers = []
-        input_dim = self.num_actor_obs + self.act_dim
-        for h in [512, 256, 128]:
+        input_dim = self.num_actor_obs
+        for h in self.actor_hidden_dims:
             mlp_layers.append(nn.Linear(input_dim, h))
             mlp_layers.append(nn.ELU())
             input_dim = h
@@ -142,8 +142,8 @@ class MoEActorCritic(ActorCritic):
         
         # 2. Expert Weight Network (learns how to use KAE experts)
         expert_weight_layers = []
-        input_dim = self.num_actor_obs 
-        for h in [32]:
+        input_dim = self.num_actor_obs
+        for h in [64, 32, 16]:
             expert_weight_layers.append(nn.Linear(input_dim, h))
             expert_weight_layers.append(nn.ELU())
             input_dim = h
@@ -153,34 +153,34 @@ class MoEActorCritic(ActorCritic):
         # Initialize expert weights with bias toward 1.0
         with torch.no_grad():
             final_layer = self.expert_weight_network[-1]
-            final_layer.weight.data.fill_(0.0)
+            final_layer.weight.data *= 0.1
             final_layer.bias.data = torch.ones(self.observable_dim)
         
         # 3. Gating Network (learns when to trust KAE vs MLP)
         gating_layers = []
-        input_dim = self.num_actor_obs + self.act_dim + self.act_dim
-        for h in [128, 64, 32]:
+        input_dim = self.num_actor_obs
+        for h in [32, 16]:  # Smaller network for gating
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
             input_dim = h
         gating_layers.append(nn.Linear(input_dim, 1))
         self.gating_network = nn.Sequential(*gating_layers)
-
-        # gradient_scale = 0.1
-        # for param in self.expert_weight_network.parameters():
-        #     param.register_hook(lambda grad: grad * gradient_scale)
-        # # --- END: NEW GRADIENT DAMPENING SECTION ---
-
-
-        # Initialize the gate to strongly favor the KAE pathway at the start.
-        # A large positive bias means sigmoid(logit) will be close to 1.0.
+        
+        # Initialize gating to favor KAE initially (sigmoid(2.0) ≈ 0.88)
         with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(1.0)
-            # self.mlp_network[-1].weight.data.fill_(0.0)
-            # self.mlp_network[-1].bias.data.fill_(0.0)
+            self.gating_network[-1].bias.data.fill_(2.0)
+        
+        # Replace the old actor (we'll use the new networks instead)
+        self.actor = None
 
-        self._cached_mu: torch.Tensor | None = None
-        self._cached_sigma: torch.Tensor | None = None
+    # # Scale the weights so initial forward pass produces ~1.0 for experts
+    #     with torch.no_grad():
+    #         final_layer = self.actor[-1]
+    #         # Make weights smaller so outputs don't explode
+    #         final_layer.weight.data *= 0.1
+    #         final_layer.bias[:self.observable_dim] = 1.0
+    #         if self.ext:
+    #             final_layer.bias[self.observable_dim:] = 0.0
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -229,8 +229,7 @@ class MoEActorCritic(ActorCritic):
         return normalized_obs
 
     def forward(self, obs): # DEBUG Override all the functions that need actions.
-
-        self.extras = {}
+        
         temp = obs.size()
         assert temp[1]==235, "observation is not 235 dim"
 
@@ -242,46 +241,85 @@ class MoEActorCritic(ActorCritic):
 
         padded_obs = self._prep_obs(obs)
 
+        # 1. MLP pathway (trainable)
+        mlp_actions = self.mlp_network(obs)
+        
+        # 2. KAE pathway (fixed experts + trainable weights)
         with torch.no_grad():
             _, latent_z, _ = self.kae(padded_obs)
             if latent_z.ndim == 1:
                 latent_z = latent_z.unsqueeze(0)
-            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [B, 16, 12]
+            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)
         
-            if torch.isnan(experts_outputs).any() or torch.isinf(experts_outputs).any():
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-
-
-                # Replace bad values with a safe neutral value (zero).
-                experts_outputs = torch.nan_to_num(experts_outputs, nan=0.0, posinf=0.0, neginf=0.0)
-
-
-        # Get weights for each KAE expert using the original, unnormalized 'obs'
         expert_weights = self.expert_weight_network(obs)
         kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
-        # self.extras['expert_weights'] = expert_weights
-
-        # 2. MLP
-        mlp_input = torch.cat([obs, kae_actions], dim=1)
-        mlp_actions = self.mlp_network(mlp_input)
         
-        # 3. Gate 
-        gating_input = torch.cat([obs, mlp_actions, kae_actions], dim=1)
-        gate_logit = self.gating_network(gating_input)
+        # 3. Gating (trainable)
+        # gate_logit = self.gating_network(obs)
+        # gate = torch.sigmoid(gate_logit)
+
+        # 4. Blend
+        # actions = gate * kae_actions + (1 - gate) * mlp_actions
+
+        # === NEW: Normalize action magnitudes ===
+        # Normalize so both pathways have similar scale
+        kae_norm = kae_actions.norm(dim=1, keepdim=True) + 1e-8
+        mlp_norm = mlp_actions.norm(dim=1, keepdim=True) + 1e-8
+        
+        # Option A: Normalize both to unit vectors, then scale together
+        kae_actions_normalized = kae_actions / kae_norm
+        mlp_actions_normalized = mlp_actions / mlp_norm
+        
+        # 3. Gating
+        gate_logit = self.gating_network(obs)
         gate = torch.sigmoid(gate_logit)
         
-        # 4. Blend the two pathways
-        actions = gate * kae_actions + (1-gate) * mlp_actions
-              
-            
-            
-        return actions
+        # 4. Blend normalized actions
+        blended_normalized = gate * kae_actions_normalized + (1 - gate) * mlp_actions_normalized
+        
+        # Re-scale using learned scale (average of both norms)
+        combined_scale = gate * kae_norm + (1 - gate) * mlp_norm
+        actions = blended_normalized * combined_scale
+        
+        
+        # Store for logging
+        self.last_moe_weights = expert_weights.detach()
+        self.last_gate = gate.detach()
+        
+        # Logging
+        if self.training and self.training_steps % 100 == 0:
+            with torch.no_grad():
+                print(f"\n[Step {self.training_steps}]")
+                print(f"Gate mean: {gate.mean().item():.3f}, std: {gate.std().item():.3f}")
+                print(f"Gate min: {gate.min().item():.3f}, max: {gate.max().item():.3f}")
+                
+                # Check if gate is saturated
+                high_gate_pct = (gate > 0.9).float().mean().item() * 100
+                low_gate_pct = (gate < 0.1).float().mean().item() * 100
+                print(f"Gate > 0.9: {high_gate_pct:.1f}%, Gate < 0.1: {low_gate_pct:.1f}%")
+                
+                print(f"Expert weights - mean: {expert_weights.mean().item():.3f}, std: {expert_weights.std().item():.3f}")
+                
+                # Action norms
+                active_dims = [i for i in range(self.act_dim) if i not in [2, 6, 10]]
+                kae_norm = kae_actions[:, active_dims].norm(dim=1).mean().item()
+                mlp_norm = mlp_actions[:, active_dims].norm(dim=1).mean().item()
+                final_norm = actions[:, active_dims].norm(dim=1).mean().item()
+                print(f"Action norms - KAE: {kae_norm:.3f}, MLP: {mlp_norm:.3f}, Final: {final_norm:.3f}")
+        
+        self.training_steps += 1
+        
+        actions = actions[..., :self.act_dim]
+        
+        if torch.isnan(actions).any() or torch.isinf(actions).any():
+            print(f"BAD actions detected!")
+            print(f"mlp_actions: {mlp_actions[0]}")
+            print(f"kae_actions: {kae_actions[0]}")
+            print(f"gate: {gate[0]}")
     
+        return actions
+
+
     def update_distribution(self, obs, masks=None, hidden_states=None):
         # Use your MoE forward to define the Gaussian policy
         mean = self.forward(obs)  # [B, act_dim]
@@ -313,7 +351,6 @@ class MoEActorCritic(ActorCritic):
         #     if hasattr(self, '_log_gradients_next') and self._log_gradients_next:
         #         self.log_gradient_stats()
         #         self._log_gradients_next = False
-
 
     def act_inference(self, obs):
         obs = self.get_actor_obs(obs)

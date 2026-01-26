@@ -30,6 +30,8 @@ class LessLegWalkingEnv(DirectRLEnv):
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
 
+        self._last_reward_mean = 0.0
+
         # X/Y linear velocity and yaw angular velocity commands
         self._commands = torch.zeros(self.num_envs, 3, device=self.device)
 
@@ -49,6 +51,7 @@ class LessLegWalkingEnv(DirectRLEnv):
                 "flat_orientation_l2",
                 "stability",
                 "forward_progress",
+                "bias_to_skill",
             ]
         }
         # Get specific body indices
@@ -228,6 +231,43 @@ class LessLegWalkingEnv(DirectRLEnv):
         forward_velocity = self._robot.data.root_lin_vel_b[:, 0]  # x-velocity in body frame
         forward_progress = torch.clamp(forward_velocity, 0.0, 2.0)  # Reward positive forward motion
 
+        # Give more rewawrd for using KAE ####################################
+        # Give more reward for using KAE (observation-based skills)
+        bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
+
+        # expert_weights = self._policy_ref.extras["expert_weights"]
+        # # Calculate L2 norm penalty: sum of squares of the weights
+        # l2_penalty = torch.sum(torch.square(expert_weights), dim=-1)
+        # bias_to_skill_reward = -l2_penalty # Negative sign to make it a penalty
+        # # --- END: MODIFIED SECTION -
+
+        # bias_to_skill_reward = self._policy_ref._last_diversity
+
+        # # # DEBUG: Check if policy reference exists
+        # if hasattr(self, '_policy_ref'):
+
+        #     moe_weights = self._policy_ref.last_moe_weights
+        #     # print(f"[DEBUG] Found last_moe_weights with shape: {moe_weights.shape}")
+            
+        #     # Calculate dimensions
+        #     total_dim = moe_weights.shape[1]
+        #     act_dim = self._actions.shape[1]
+        #     obv_dim = total_dim - act_dim
+            
+        #     if obv_dim > 0:
+        #         expert_weights_abs = torch.abs(moe_weights[:, :obv_dim])
+
+        #         # Entropy of expert weight distribution
+        #         weights_normalized = expert_weights_abs / (expert_weights_abs.sum(dim=1, keepdim=True) + 1e-8)
+        #         entropy = -(weights_normalized * torch.log(weights_normalized + 1e-8)).sum(dim=1)
+
+        #         scale = getattr(self.cfg, "bias_to_skill_reward_scale", 0.0)
+        #         bias_to_skill_reward = entropy * float(scale) * self.step_dt
+
+                                 
+        ########################################################################
+
+
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
@@ -241,11 +281,28 @@ class LessLegWalkingEnv(DirectRLEnv):
             "flat_orientation_l2": flat_orientation * self.cfg.flat_orientation_reward_scale * self.step_dt,
             "stability": stability * self.cfg.stability_reward_scale * self.step_dt,
             "forward_progress": forward_progress * self.cfg.forward_progress_reward_scale * self.step_dt,
+
+            "bias_to_skill": self.cfg.bias_to_skill_reward_scale*bias_to_skill_reward * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+
+        reward_without_bias = reward - self.cfg.bias_to_skill_reward_scale * bias_to_skill_reward * self.step_dt
+                
+        # Let's return the FULL reward for training, but track core separately
+        if not hasattr(self, '_episode_core_reward'):
+            self._episode_core_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        if not hasattr(self, '_episode_full_reward'):
+            self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        
+        self._episode_core_reward += reward_without_bias
+        self._episode_full_reward += reward
+        self._last_reward_mean = reward.mean().item()
+
+
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -292,6 +349,19 @@ class LessLegWalkingEnv(DirectRLEnv):
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
             self._episode_sums[key][env_ids] = 0.0
+
+        # Log core mean reward (matching RSL-RL's Mean reward format)
+        if hasattr(self, '_episode_core_reward') and hasattr(self, '_episode_full_reward'):
+            core_mean = torch.mean(self._episode_core_reward[env_ids]).item()
+            full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
+            
+            extras["train/core_mean_reward"] = core_mean
+            extras["train/full_mean_reward"] = full_mean
+            extras["train/bias_contribution"] = full_mean - core_mean
+            
+            self._episode_core_reward[env_ids] = 0.0
+            self._episode_full_reward[env_ids] = 0.0
+            
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()

@@ -6,15 +6,12 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [128, 64, 32]
+    actor_hidden_dims: list[int] = [512, 256, 128]
     # actor_hidden_dims: list[int] = [256, 128, 64]
     critic_hidden_dims: list[int] = [512, 256, 128]
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
     kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_wtask_p1_pad256_obv16.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_wdist_p1_pad256_obv16_v2.pth"
-
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
@@ -77,7 +74,6 @@ class MoEActorCritic(ActorCritic):
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p')
         activation = kwargs.pop("activation")
-        self.identity_weight_decay = kwargs.pop('identity_weight_decay', 0.01)
 
         # get the observation dimensions
         self.obs_groups = obs_groups
@@ -85,12 +81,12 @@ class MoEActorCritic(ActorCritic):
         for obs_group in obs_groups["policy"]:
             assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
             self.num_actor_obs += obs[obs_group].shape[-1]
-
         self.num_critic_obs = 0
         for obs_group in obs_groups["critic"]:
             assert len(obs[obs_group].shape) == 2, "The ActorCritic module only supports 1D observations."
             self.num_critic_obs += obs[obs_group].shape[-1]
         
+
         raw_init_noise_std = kwargs.pop("init_noise_std", 0.8)
         if isinstance(raw_init_noise_std, dict):
             init_noise_std = raw_init_noise_std.get("value", 0.8)
@@ -129,59 +125,23 @@ class MoEActorCritic(ActorCritic):
         self.kae = torch.load(self.kae_path, map_location=self.device, weights_only=False)
         for param in self.kae.parameters():
             param.requires_grad = False
-
-       # 1. MLP Network (learns residual correction)
-        mlp_layers = []
-        input_dim = self.num_actor_obs + self.act_dim
-        for h in [512, 256, 128]:
-            mlp_layers.append(nn.Linear(input_dim, h))
-            mlp_layers.append(nn.ELU())
-            input_dim = h
-        mlp_layers.append(nn.Linear(input_dim, self.act_dim))
-        self.mlp_network = nn.Sequential(*mlp_layers)
         
-        # 2. Expert Weight Network (learns how to use KAE experts)
-        expert_weight_layers = []
-        input_dim = self.num_actor_obs 
-        for h in [32]:
-            expert_weight_layers.append(nn.Linear(input_dim, h))
-            expert_weight_layers.append(nn.ELU())
+        self.expert_processor = nn.Sequential(
+        nn.Linear(self.act_dim, 32),  # 12 -> 32
+        nn.ELU(),
+        nn.Linear(32, self.act_dim)   # 32 -> 12
+    )
+    
+        # Gating network for combining processed experts
+        gate_layers = []
+        input_dim = self.num_actor_obs  # 235
+        for h in [256, 128]:
+            gate_layers.append(nn.Linear(input_dim, h))
+            gate_layers.append(nn.ELU())
             input_dim = h
-        expert_weight_layers.append(nn.Linear(input_dim, self.observable_dim))
-        self.expert_weight_network = nn.Sequential(*expert_weight_layers)
+        gate_layers.append(nn.Linear(input_dim, self.observable_dim))  # -> 16
+        self.gate_network = nn.Sequential(*gate_layers)
         
-        # Initialize expert weights with bias toward 1.0
-        with torch.no_grad():
-            final_layer = self.expert_weight_network[-1]
-            final_layer.weight.data.fill_(0.0)
-            final_layer.bias.data = torch.ones(self.observable_dim)
-        
-        # 3. Gating Network (learns when to trust KAE vs MLP)
-        gating_layers = []
-        input_dim = self.num_actor_obs + self.act_dim + self.act_dim
-        for h in [128, 64, 32]:
-            gating_layers.append(nn.Linear(input_dim, h))
-            gating_layers.append(nn.ELU())
-            input_dim = h
-        gating_layers.append(nn.Linear(input_dim, 1))
-        self.gating_network = nn.Sequential(*gating_layers)
-
-        # gradient_scale = 0.1
-        # for param in self.expert_weight_network.parameters():
-        #     param.register_hook(lambda grad: grad * gradient_scale)
-        # # --- END: NEW GRADIENT DAMPENING SECTION ---
-
-
-        # Initialize the gate to strongly favor the KAE pathway at the start.
-        # A large positive bias means sigmoid(logit) will be close to 1.0.
-        with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(1.0)
-            # self.mlp_network[-1].weight.data.fill_(0.0)
-            # self.mlp_network[-1].bias.data.fill_(0.0)
-
-        self._cached_mu: torch.Tensor | None = None
-        self._cached_sigma: torch.Tensor | None = None
-
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
             keys = list(obs.keys())
@@ -229,8 +189,7 @@ class MoEActorCritic(ActorCritic):
         return normalized_obs
 
     def forward(self, obs): # DEBUG Override all the functions that need actions.
-
-        self.extras = {}
+        
         temp = obs.size()
         assert temp[1]==235, "observation is not 235 dim"
 
@@ -242,46 +201,36 @@ class MoEActorCritic(ActorCritic):
 
         padded_obs = self._prep_obs(obs)
 
+        # Get expert outputs as context (frozen)
         with torch.no_grad():
-            _, latent_z, _ = self.kae(padded_obs)
-            if latent_z.ndim == 1:
-                latent_z = latent_z.unsqueeze(0)
-            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [B, 16, 12]
-        
-            if torch.isnan(experts_outputs).any() or torch.isinf(experts_outputs).any():
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-                print("WARNING: NaN or Inf detected in experts_outputs. Replacing with zeros.")
-
-
-                # Replace bad values with a safe neutral value (zero).
-                experts_outputs = torch.nan_to_num(experts_outputs, nan=0.0, posinf=0.0, neginf=0.0)
-
-
-        # Get weights for each KAE expert using the original, unnormalized 'obs'
-        expert_weights = self.expert_weight_network(obs)
-        kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
-        # self.extras['expert_weights'] = expert_weights
-
-        # 2. MLP
-        mlp_input = torch.cat([obs, kae_actions], dim=1)
-        mlp_actions = self.mlp_network(mlp_input)
-        
-        # 3. Gate 
-        gating_input = torch.cat([obs, mlp_actions, kae_actions], dim=1)
-        gate_logit = self.gating_network(gating_input)
-        gate = torch.sigmoid(gate_logit)
-        
-        # 4. Blend the two pathways
-        actions = gate * kae_actions + (1-gate) * mlp_actions
-              
+            _, kae_latent, _ = self.kae(padded_obs)
+            if kae_latent.ndim == 1:
+                kae_latent = kae_latent.unsqueeze(0)
+            experts_outputs = get_experts_outputs(self.kae, kae_latent, self.p, self.act_dim)  # [B, 16, 12]
             
-            
-        return actions
+        processed_experts = []
+
+        for i in range(self.observable_dim):
+            expert_out = experts_outputs[:, i, :]  # [B, 12]
+            processed = self.expert_processor(expert_out)  # [B, 12] - stabilize nonlinearity
+            processed_experts.append(processed)
+        processed_experts = torch.stack(processed_experts, dim=1)  # [B, 16, 12]
+        
+        # Learn weights for processed (stabilized) experts
+        expert_weights = self.gate_network(obs)  # [B, 16]
+        extended_experts = extend_experts_outputs(experts_outputs, self.act_dim)  # [B, 28, 12]
+        expert_context = extended_experts.reshape(obs.shape[0], -1)  # [B, 336] not [B, 192]
+
+        mlp_input = torch.cat([obs, expert_context], dim=-1)  # [B, 571] not [B, 427]
+        actions = self.actor(mlp_input)
+
+        # Combine processed experts
+        # actions = torch.einsum('be,bea->ba', expert_weights, processed_experts)  # [B, 12]
     
+
+        return actions
+
+
     def update_distribution(self, obs, masks=None, hidden_states=None):
         # Use your MoE forward to define the Gaussian policy
         mean = self.forward(obs)  # [B, act_dim]
@@ -313,7 +262,6 @@ class MoEActorCritic(ActorCritic):
         #     if hasattr(self, '_log_gradients_next') and self._log_gradients_next:
         #         self.log_gradient_stats()
         #         self._log_gradients_next = False
-
 
     def act_inference(self, obs):
         obs = self.get_actor_obs(obs)

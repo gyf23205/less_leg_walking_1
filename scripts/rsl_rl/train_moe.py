@@ -193,10 +193,55 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create runner from rsl-rl
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+
+        # original_update = runner.alg.update
+        # 
+        # def update_with_regularization():
+        #     # Call original update
+        #     mean_value_loss, mean_surrogate_loss, mean_kl, mean_entropy, mean_lr = original_update()
+            
+        #     # Add regularization loss and backprop
+        #     reg_loss = runner.alg.actor_critic.get_identity_regularization_loss()
+        #     if reg_loss.item() > 0:
+        #         runner.alg.actor_optimizer.zero_grad()
+        #         reg_loss.backward()
+        #         runner.alg.actor_optimizer.step()
+            
+        #     return mean_value_loss, mean_surrogate_loss, mean_kl, mean_entropy, mean_lr
+        
+        # runner.alg.update = update_with_regularization
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+        # print("[INFO] Identity regularization enabled for MoE training")
+
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    
+    # Link the policy to the environment so rewards can access MoE weights
+    if hasattr(runner.alg, 'actor_critic'):
+        env.unwrapped._policy_ref = runner.alg.actor_critic
+        print(f"[INFO] Linked policy to environment: actor_critic")
+    elif hasattr(runner.alg, 'policy'):
+        env.unwrapped._policy_ref = runner.alg.policy
+        print(f"[INFO] Linked policy to environment: policy")
+    elif hasattr(runner.alg, 'actor'):
+        env.unwrapped._policy_ref = runner.alg.actor
+        print(f"[INFO] Linked policy to environment: actor")
+    else:
+        print(f"[WARNING] Could not find policy in runner.alg. Available attributes: {[attr for attr in dir(runner.alg) if not attr.startswith('_')]}")
+        env.unwrapped._policy_ref = None
+ 
  
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
@@ -237,7 +282,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         print(f"Warning: Could not find model in runner.alg. Available attributes: {[attr for attr in dir(runner.alg) if not attr.startswith('_')]}")
         model = None
-
 
     complete_model_data = {
         'actor': model.actor,
