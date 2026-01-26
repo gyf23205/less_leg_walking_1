@@ -319,6 +319,14 @@ class LessLegWalkingEnv(DirectRLEnv):
         if len(env_ids) == self.num_envs:
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
+        # self.episode_length_buf[env_ids] = torch.randint(
+        #     0, int(self.max_episode_length), (len(env_ids),), 
+        #     device=self.device, dtype=self.episode_length_buf.dtype
+        # )
+        # timeout_rate = self.reset_time_outs.float().mean().item()
+        # print(f"Timeout rate: {timeout_rate:.3f}")
+
+
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
         # Sample new commands - bias towards forward motion for three-legged walking
