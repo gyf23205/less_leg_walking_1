@@ -153,8 +153,8 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     flat_orientation_reward_scale = -1.0  # Further reduced as 3-leg robot needs to tilt
     stability_reward_scale = 0.5  # Reduced to not dominate other rewards
     forward_progress_reward_scale = 2.0  # New reward for forward progress
-    action_norm_scale = -0.01
-    weight_sensitivty_scale = -0.01
+    action_norm_scale = -0.1
+    weight_sensitivty_scale = -0.1
 
     # we add a height scanner for perceptive locomotion
     height_scanner = RayCasterCfg(

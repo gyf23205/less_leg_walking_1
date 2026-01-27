@@ -7,7 +7,7 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [512, 256, 128]
+    actor_hidden_dims: list[int] = [64, 32]
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
@@ -145,7 +145,7 @@ class MoEActorCritic(ActorCritic):
                # 1. MLP Network (learns residual correction)
         mlp_layers = []
         input_dim = self.num_actor_obs
-        for h in [64, 32]:
+        for h in self.actor_hidden_dims:
             mlp_layers.append(nn.Linear(input_dim, h))
             mlp_layers.append(nn.ELU())
             input_dim = h
@@ -171,7 +171,7 @@ class MoEActorCritic(ActorCritic):
         # 3. Gating Network (learns when to trust KAE vs MLP)
         gating_layers = []
         input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
-        for h in [64, 32]:
+        for h in self.actor_hidden_dims:
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
             input_dim = h

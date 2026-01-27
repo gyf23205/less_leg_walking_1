@@ -278,7 +278,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         for key, value in rewards.items():
             self._episode_sums[key] += value
 
-        reward_without_bias = reward - (self.cfg.action_norm_scale*action_norm_penalty * self.step_dt) \
+        reward_without_MoE_only = reward - (self.cfg.action_norm_scale*action_norm_penalty * self.step_dt) \
                             - (self.cfg.weight_sensitivty_scale*weight_stability * self.step_dt)
                 
         # Let's return the FULL reward for training, but track core separately
@@ -287,7 +287,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         if not hasattr(self, '_episode_full_reward'):
             self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         
-        self._episode_core_reward += reward_without_bias
+        self._episode_core_reward += reward_without_MoE_only
         self._episode_full_reward += reward
         self._last_reward_mean = reward.mean().item()
 

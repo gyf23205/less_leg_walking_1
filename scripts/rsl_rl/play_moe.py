@@ -25,7 +25,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 # DEBUG
-parser.add_argument("--task", type=str, default="Less-Leg-Rough-Walking-Direct-v1", help="Name of the task.")
+parser.add_argument("--task", type=str, default="Less-Leg-Flat-Walking-Direct-v1", help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
@@ -158,14 +158,97 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    # load previously trained model
+
+    checkpoint = torch.load(resume_path, map_location="cpu")
+    model_state = checkpoint["model_state_dict"]
+    
+    detected_dims = []
+    layer_idx = 0
+    # Use the env's action space to find the output layer size (12)
+    target_action_dim = env.unwrapped.action_space.shape[0]
+
+    while True:
+        key = f"mlp_network.{layer_idx}.weight"
+        if key in model_state:
+            width = model_state[key].shape[0]
+            # If width matches the action dim, we found the output layer. Stop.
+            if width == target_action_dim:
+                break
+            detected_dims.append(width)
+            layer_idx += 2 # Skip activation layer
+        else:
+            break
+            
+    print(f"[INFO]: Checkpoint requires architecture: {detected_dims}")
+
+    # -------------------------------------------------------------------------
+    # 2. OVERRIDE CONFIGURATION
+    # -------------------------------------------------------------------------
+    # Update the config object to match the file's reality [128, 64, 32]
+    agent_cfg.actor_hidden_dims = detected_dims
+    agent_cfg.critic_hidden_dims = detected_dims
+
+    # -------------------------------------------------------------------------
+    # 3. REGENERATE DICTIONARY
+    # -------------------------------------------------------------------------
+    # CRITICAL: The runner uses this dict, NOT the agent_cfg object directly.
+    # We must regenerate it so it contains the new 'detected_dims'.
+    updated_agent_dict = agent_cfg.to_dict()
+
+    # -------------------------------------------------------------------------
+    # 4. INITIALIZE RUNNER
+    # -------------------------------------------------------------------------
     if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        runner = OnPolicyRunner(env, updated_agent_dict, log_dir=None, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        runner = DistillationRunner(env, updated_agent_dict, log_dir=None, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    
     runner.load(resume_path)
+
+    # # load previously trained model
+    # if agent_cfg.class_name == "OnPolicyRunner":
+    #     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    # elif agent_cfg.class_name == "DistillationRunner":
+    #     runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    # else:
+    #     raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    # runner.load(resume_path)
+
+    # -------------------------------------------------------------------------
+    # CRITICAL FIX: LINK POLICY TO ENVIRONMENT
+    # -------------------------------------------------------------------------
+    # The environment's reward function tries to access 'self._policy_ref'.
+    # We must manually attach the loaded policy to the environment.
+    
+    # 1. Find the policy object within the runner
+    policy_obj = None
+    if hasattr(runner.alg, 'actor_critic'):
+        policy_obj = runner.alg.actor_critic
+    elif hasattr(runner.alg, 'policy'):
+        policy_obj = runner.alg.policy
+    elif hasattr(runner.alg, 'actor'):
+        policy_obj = runner.alg.actor
+
+    # 2. Attach it to the unwrapped environment
+    if policy_obj is not None:
+        env.unwrapped._policy_ref = policy_obj
+        print(f"[INFO] Successfully linked policy to environment.")
+        
+        # SAFETY PATCH: If you loaded a Standard PPO model (not MoE), 
+        # it won't have 'last_expert_weights'. We inject a dummy to prevent a new crash.
+        if not hasattr(policy_obj, 'last_expert_weights'):
+            print("[WARNING] Loaded policy is missing 'last_expert_weights' (Likely Standard PPO). Injecting dummy.")
+            # Inject a static zero tensor so the reward calculation doesn't fail
+            device = env.unwrapped.device
+            num_envs = env.unwrapped.num_envs
+            # Assuming 16 experts based on your env file comments
+            policy_obj.last_expert_weights = torch.zeros(num_envs, 16, device=device)
+    else:
+        print("[WARNING] Could not find policy object to link! Environment might crash.")
+
+    # -------------------------------------------------------------------------
 
     # obtain the trained policy for inference
     policy = runner.get_inference_policy(device=env.unwrapped.device)
