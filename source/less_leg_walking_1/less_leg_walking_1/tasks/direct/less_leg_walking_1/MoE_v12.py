@@ -142,48 +142,35 @@ class MoEActorCritic(ActorCritic):
 
         self.kae.eval()
 
-               # 1. MLP Network (learns residual correction)
-        mlp_layers = []
-        input_dim = self.num_actor_obs
-        for h in [128, 64, 32]:
-            mlp_layers.append(nn.Linear(input_dim, h))
-            mlp_layers.append(nn.ELU())
-            input_dim = h
-        mlp_layers.append(nn.Linear(input_dim, self.act_dim))
-        self.mlp_network = nn.Sequential(*mlp_layers)
-        
-        # 2. Expert Weight Network (learns how to use KAE experts)
-        expert_weight_layers = []
-        input_dim = self.num_actor_obs
-        for h in [32]:
-            expert_weight_layers.append(nn.Linear(input_dim, h))
-            expert_weight_layers.append(nn.ELU())
-            input_dim = h
-        expert_weight_layers.append(nn.Linear(input_dim, self.observable_dim))
-        self.expert_weight_network = nn.Sequential(*expert_weight_layers)
-        
-        # Initialize expert weights with bias toward 1.0
-        with torch.no_grad():
-            final_layer = self.expert_weight_network[-1]
-            final_layer.weight.data.fill_(0.0)
-            final_layer.bias.data = torch.ones(self.observable_dim)
-        
-        # 3. Gating Network (learns when to trust KAE vs MLP)
-        gating_layers = []
-        input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
-        for h in [128, 64, 32]:
-            gating_layers.append(nn.Linear(input_dim, h))
-            gating_layers.append(nn.ELU())
-            input_dim = h
-        gating_layers.append(nn.Linear(input_dim, 1))
-        self.gating_network = nn.Sequential(*gating_layers)
+        # __init__:
+        self.num_new_modes = 6
 
-        # Initialize the gate to strongly favor the KAE pathway at the start.
-        # A large positive bias means sigmoid(logit) will be close to 1.0.
         with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(1.0)
-            # self.mlp_network[-1].weight.data.fill_(0.0)
-            # self.mlp_network[-1].bias.data.fill_(0.0)
+            existing_eigvals = torch.linalg.eigvals(self.kae.K)
+            # Use magnitude and phase similar to existing
+            avg_mag = existing_eigvals.abs().mean().item()
+            avg_phase = existing_eigvals.angle().mean().item()
+            
+        self.new_eigvals_real = nn.Parameter(torch.ones(self.num_new_modes) * avg_mag * torch.cos(torch.tensor(avg_phase)))
+        self.new_eigvals_imag = nn.Parameter(torch.ones(self.num_new_modes) * avg_mag * torch.sin(torch.tensor(avg_phase)))
+
+        self.new_phi_network = nn.Sequential(
+            nn.Linear(self.observable_dim, 256),
+            nn.ELU(),
+            nn.Linear(256, 128),
+            nn.ELU(),
+            nn.Linear(128, self.num_new_modes)
+        )
+
+        self.decoder_3leg = nn.Linear(self.observable_dim + self.num_new_modes, self.padded_dim, bias=False)
+        
+        with torch.no_grad():
+            self.decoder_3leg.weight[:, :self.observable_dim] = self.kae.decoder.linear.weight.clone()
+            decoder_std = self.kae.decoder.linear.weight.std().item()
+            self.decoder_3leg.weight[:, self.observable_dim:] = torch.randn(self.padded_dim, self.num_new_modes) * decoder_std * 0.1
+
+        self._last_z = None
+        self._last_new_phi = None
 
 
     def _extract_obs_tensor(self, obs):
@@ -212,16 +199,14 @@ class MoEActorCritic(ActorCritic):
             return F.pad(tensor, (0, pad_size), value=1.0)
         return tensor[..., : self.padded_dim]
 
-    def _prep_obs(self, obs, for_critic: bool = False, return_raw: bool = False, skip_norm: bool = False):
+    def _prep_obs(self, obs, for_critic: bool = False, return_raw: bool = False):
         obs_tensor = self._extract_obs_tensor(obs).to(self.device, dtype=torch.float32)
         if obs_tensor.ndim == 1:
             obs_tensor = obs_tensor.unsqueeze(0)
 
         raw_obs = self._pad_to_dim(obs_tensor).clone() if return_raw else None
 
-        if skip_norm:
-            normalized_obs = obs_tensor
-        elif for_critic and self._use_critic_obs_norm:
+        if for_critic and self._use_critic_obs_norm:
             normalized_obs = self.critic_obs_normalizer(obs_tensor)
         elif not for_critic and self._use_actor_obs_norm:
             normalized_obs = self.actor_obs_normalizer(obs_tensor)
@@ -246,32 +231,56 @@ class MoEActorCritic(ActorCritic):
             print(f"obs has Inf: {torch.isinf(obs).any()}")
             print(f"obs stats: min={obs.min()}, max={obs.max()}")   
 
-        padded_obs = self._prep_obs(obs, skip_norm=True)
+        padded_obs = self._prep_obs(obs)
 
         with torch.no_grad():
-            _, latent_z, _ = self.kae(padded_obs)
+            _, latent_z, _ = self.kae(padded_obs)  # [B, 16]
             if latent_z.ndim == 1:
                 latent_z = latent_z.unsqueeze(0)
-            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [B, 16, 12]
         
-        # Get weights for each KAE expert using the original, unnormalized 'obs'
-        expert_weights = self.expert_weight_network(obs)
-        kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
+        phi_out = self.new_phi_network(latent_z)
+        # new_phi = phi_out[:, :self.num_new_modes]
+        new_phi = phi_out[:, :self.num_new_modes]  # only first half
         
-        # 2. MLP pathway (residual) - uses the original, unnormalized 'obs'
-        mlp_actions = self.mlp_network(obs)
+        z_combined = torch.cat([latent_z, new_phi], dim=-1)
+        decoded = self.decoder_3leg(z_combined)
+        actions = decoded[:, :self.act_dim]
         
-        # 3. Gate decides blending - uses the original, unnormalized 'obs'
-        gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
-        gate_logit = self.gating_network(gating_input)
-        gate = torch.sigmoid(gate_logit)
+        # Store for physics reward
+        self._last_z = latent_z.detach()
+        self._last_new_phi = new_phi.detach()
         
-        # 4. Blend the two pathways
-        actions = kae_actions + gate * mlp_actions
-            
-            
         return actions
             
+    def compute_physics_reward(self, obs_t1):
+        if self._last_z is None or self._last_new_phi is None:
+            return torch.zeros(obs_t1.shape[0], device=obs_t1.device)
+        
+        padded_t1 = self._prep_obs(obs_t1)
+        
+        with torch.no_grad():
+            x_hat_t1, z_t1, _ = self.kae(padded_t1)
+            if z_t1.ndim == 1:
+                z_t1 = z_t1.unsqueeze(0)
+        
+        phi_out_t1 = self.new_phi_network(z_t1)
+        new_phi_t1 = phi_out_t1[:, :self.num_new_modes]
+        
+        # λ=1: φ_{t+1} ≈ φ_t
+        latent_pred_loss = torch.mean((self._last_new_phi - new_phi_t1) ** 2, dim=-1)
+        
+        # State pred loss
+        z_combined_t1 = torch.cat([z_t1, new_phi_t1], dim=-1)
+        decoded_t1 = self.decoder_3leg(z_combined_t1)
+        state_pred_loss = torch.mean((decoded_t1 - padded_t1) ** 2, dim=-1)
+        
+        # Recon loss
+        recon_loss = torch.mean((x_hat_t1 - padded_t1) ** 2, dim=-1)
+        
+        c1, c2, c3 = 1, 1, 1
+        physics_reward = -c1 * recon_loss - c2 * state_pred_loss - c3 * latent_pred_loss
+        
+        return physics_reward
        
     def act(self, obs, **kwargs):
         # Match base class exactly

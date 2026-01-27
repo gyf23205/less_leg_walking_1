@@ -26,6 +26,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Modified for 3 legs: 9 joints instead of 12
         self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self.full_action_for_KAE = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        self._previous_actions_KAE = self.full_action_for_KAE.clone()
         self._previous_actions = torch.zeros(
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
@@ -109,6 +110,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         
         self._actions[:, [2, 6, 10]] = 0.0
         self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
+        self._previous_actions_KAE = self.full_action_for_KAE.clone()
         self.full_action_for_KAE = actions.clone()
         ####### 
 
@@ -233,8 +235,14 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         # Give more rewawrd for using KAE ####################################
         # Give more reward for using KAE (observation-based skills)
-        bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
+        # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
 
+        bias_to_skill_reward = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+        
+        # obs = self._get_observations()["policy"]
+        # bias_to_skill_reward = self._policy_ref.compute_physics_reward(obs)
+
+        
         # expert_weights = self._policy_ref.extras["expert_weights"]
         # # Calculate L2 norm penalty: sum of squares of the weights
         # l2_penalty = torch.sum(torch.square(expert_weights), dim=-1)
