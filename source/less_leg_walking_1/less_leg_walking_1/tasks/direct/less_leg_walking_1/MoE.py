@@ -145,7 +145,7 @@ class MoEActorCritic(ActorCritic):
                # 1. MLP Network (learns residual correction)
         mlp_layers = []
         input_dim = self.num_actor_obs
-        for h in [128, 64, 32]:
+        for h in [64, 32]:
             mlp_layers.append(nn.Linear(input_dim, h))
             mlp_layers.append(nn.ELU())
             input_dim = h
@@ -171,19 +171,19 @@ class MoEActorCritic(ActorCritic):
         # 3. Gating Network (learns when to trust KAE vs MLP)
         gating_layers = []
         input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
-        for h in [128, 64, 32]:
+        for h in [64, 32]:
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
             input_dim = h
         gating_layers.append(nn.Linear(input_dim, 1))
         self.gating_network = nn.Sequential(*gating_layers)
 
-        # Initialize the gate to strongly favor the KAE pathway at the start.
-        # A large positive bias means sigmoid(logit) will be close to 1.0.
-        with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(1.0)
-            # self.mlp_network[-1].weight.data.fill_(0.0)
-            # self.mlp_network[-1].bias.data.fill_(0.0)
+        # # Initialize the gate to strongly favor the KAE pathway at the start.
+        # # A large positive bias means sigmoid(logit) will be close to 1.0.
+        # with torch.no_grad():
+        #     self.gating_network[-1].bias.data.fill_(1.0)
+        #     # self.mlp_network[-1].weight.data.fill_(0.0)
+        #     # self.mlp_network[-1].bias.data.fill_(0.0)
 
 
     def _extract_obs_tensor(self, obs):
@@ -268,6 +268,8 @@ class MoEActorCritic(ActorCritic):
         
         # 4. Blend the two pathways
         actions = kae_actions + gate * mlp_actions
+
+        self.last_expert_weights = expert_weights.detach()
             
             
         return actions

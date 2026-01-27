@@ -52,7 +52,8 @@ class LessLegWalkingEnv(DirectRLEnv):
                 "flat_orientation_l2",
                 "stability",
                 "forward_progress",
-                "bias_to_skill",
+                "action_norm",
+                "sensitivity",
             ]
         }
         # Get specific body indices
@@ -237,43 +238,22 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Give more reward for using KAE (observation-based skills)
         # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
 
-        bias_to_skill_reward = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+        # action norm penalty
+        action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+
+        # weight sensitivty
+        current_weights = self._policy_ref.last_expert_weights # [16 experts]
         
-        # obs = self._get_observations()["policy"]
-        # bias_to_skill_reward = self._policy_ref.compute_physics_reward(obs)
+        if not hasattr(self, '_prev_expert_weights'):
+            self._prev_expert_weights = current_weights.clone()
 
-        
-        # expert_weights = self._policy_ref.extras["expert_weights"]
-        # # Calculate L2 norm penalty: sum of squares of the weights
-        # l2_penalty = torch.sum(torch.square(expert_weights), dim=-1)
-        # bias_to_skill_reward = -l2_penalty # Negative sign to make it a penalty
-        # # --- END: MODIFIED SECTION -
+        # Penalize the variance/jitter of the expert selection.
+        # For a phantom leg, the weights often fluctuate wildly as the network 
+        # 'searches' for feedback. This dampens that search.
+        weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
 
-        # bias_to_skill_reward = self._policy_ref._last_diversity
-
-        # # # DEBUG: Check if policy reference exists
-        # if hasattr(self, '_policy_ref'):
-
-        #     moe_weights = self._policy_ref.last_moe_weights
-        #     # print(f"[DEBUG] Found last_moe_weights with shape: {moe_weights.shape}")
-            
-        #     # Calculate dimensions
-        #     total_dim = moe_weights.shape[1]
-        #     act_dim = self._actions.shape[1]
-        #     obv_dim = total_dim - act_dim
-            
-        #     if obv_dim > 0:
-        #         expert_weights_abs = torch.abs(moe_weights[:, :obv_dim])
-
-        #         # Entropy of expert weight distribution
-        #         weights_normalized = expert_weights_abs / (expert_weights_abs.sum(dim=1, keepdim=True) + 1e-8)
-        #         entropy = -(weights_normalized * torch.log(weights_normalized + 1e-8)).sum(dim=1)
-
-        #         scale = getattr(self.cfg, "bias_to_skill_reward_scale", 0.0)
-        #         bias_to_skill_reward = entropy * float(scale) * self.step_dt
-
-                                 
-        ########################################################################
+        # Update buffer
+        self._prev_expert_weights = current_weights.clone()
 
 
         rewards = {
@@ -289,8 +269,8 @@ class LessLegWalkingEnv(DirectRLEnv):
             "flat_orientation_l2": flat_orientation * self.cfg.flat_orientation_reward_scale * self.step_dt,
             "stability": stability * self.cfg.stability_reward_scale * self.step_dt,
             "forward_progress": forward_progress * self.cfg.forward_progress_reward_scale * self.step_dt,
-
-            "bias_to_skill": self.cfg.bias_to_skill_reward_scale*bias_to_skill_reward * self.step_dt,
+            "action_norm": self.cfg.action_norm_scale*action_norm_penalty * self.step_dt,
+            "sensitivity": self.cfg.weight_sensitivty_scale*weight_stability * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -298,7 +278,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         for key, value in rewards.items():
             self._episode_sums[key] += value
 
-        reward_without_bias = reward - self.cfg.bias_to_skill_reward_scale * bias_to_skill_reward * self.step_dt
+        reward_without_bias = reward - (self.cfg.action_norm_scale*action_norm_penalty * self.step_dt) \
+                            - (self.cfg.weight_sensitivty_scale*weight_stability * self.step_dt)
                 
         # Let's return the FULL reward for training, but track core separately
         if not hasattr(self, '_episode_core_reward'):
@@ -373,7 +354,7 @@ class LessLegWalkingEnv(DirectRLEnv):
             
             extras["train/core_mean_reward"] = core_mean
             extras["train/full_mean_reward"] = full_mean
-            extras["train/bias_contribution"] = full_mean - core_mean
+            extras["train/MoE_only_reward(penality) contribution"] = full_mean - core_mean
             
             self._episode_core_reward[env_ids] = 0.0
             self._episode_full_reward[env_ids] = 0.0
