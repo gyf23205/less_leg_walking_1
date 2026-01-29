@@ -19,11 +19,11 @@ from ..MoE import MoECfg, MoEActorCritic  # Import both
 @configclass
 class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 2000  # Increased for more training
+    max_iterations = 2500  # Increased for more training
     save_interval = 50
-    # experiment_name = "less_leg_walking_flat"
+    experiment_name = "less_leg_walking_flat"
     # experiment_name = "MoE16_less_leg_walking_flat"
-    experiment_name = "Residual_less_leg_walking_flat"
+    # experiment_name = "Residual_less_leg_walking_flat"
     # experiment_name = "Nominal_less_leg_walking_flat"
     empirical_normalization = False
 
@@ -33,6 +33,14 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
     # USE THIS FOR MoE
     policy = MoECfg()
+
+    # Train from scratch nominal policy
+    # policy = RslRlPpoActorCriticCfg(
+    #     init_noise_std=1.0,
+    #     actor_hidden_dims=[512, 256, 128],
+    #     critic_hidden_dims=[512, 256, 128],
+    #     activation="elu",
+    # )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -42,7 +50,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=0.02,  # Increased entropy for more exploration
         num_learning_epochs=8,  # More learning epochs
         num_mini_batches=4,
-        learning_rate=3.0e-4,  # 3.0e-4, -> 1.0e-4 Slightly lower learning rate for stability
+        learning_rate=3.0e-4,
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
@@ -58,16 +66,16 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
     
     # Slightly different hyperparameters for rough terrain
     algorithm = RslRlPpoAlgorithmCfg(
-        value_loss_coef=1.0,
+        value_loss_coef=0.7, # 1.0
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.005,  # Slightly lower entropy for more stable policy
-        num_learning_epochs=5,
-        num_mini_batches=4,
-        learning_rate=1.0e-3,
+        entropy_coef=0.007, # 0.005 
+        num_mini_batches=5,
+        num_learning_epochs=10, # 5
+        learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
         desired_kl=0.01,
-        max_grad_norm=1.0,
+        max_grad_norm=2.0, # 1.0
     )

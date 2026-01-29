@@ -6,16 +6,14 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [512, 256, 128]
-    # actor_hidden_dims: list[int] = [256, 128, 64]
+    actor_hidden_dims: list[int] = [256, 128]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv64.pth"
-    # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/ForMOE_p1_pad256_obv16.pth"
+    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
+    log_dir = "/home/yifan/git/less_leg_walking_1/logs/rsl_rl/less_leg_walking_rough"
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
+    top_k: int = 4            # <— add top-k gating
     class_name: str = "MoEActorCritic"
     actor_obs_normalization: bool = False
     critic_obs_normalization: bool = False
@@ -43,6 +41,7 @@ try:
     from tensordict import TensorDictBase
 except ImportError:  # fallback if tensordict version differs
     from tensordict.tensordict import TensorDictBase
+from torch.utils.tensorboard import SummaryWriter
 
 # Allowlist for safe loading
 add_safe_globals([KoopmanAutoencoder_walk])
@@ -62,6 +61,9 @@ class MoEActorCritic(ActorCritic):
         # print(num_actor_obs)
         # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         # assert False
+        self.writer = SummaryWriter(log_dir=kwargs.pop("log_dir"))
+        self.count = 0
+
         self.n_experts = n_experts
        
         # Extract custom params from kwargs to avoid conflicts
@@ -77,6 +79,7 @@ class MoEActorCritic(ActorCritic):
         self.device = kwargs.pop('device')
         # self.n_experts = kwargs.pop('n_experts', 1)
         self.p = kwargs.pop('p')
+        self.top_k = kwargs.pop('top_k')
         activation = kwargs.pop("activation")
 
         # get the observation dimensions
@@ -147,7 +150,10 @@ class MoEActorCritic(ActorCritic):
             actor_layers.append(nn.ELU())
             input_dim = h
 
-        actor_layers.append(nn.Linear(input_dim, self.observable_dim+self.act_dim))  # weights for experts
+        actor_layers.append(nn.Linear(input_dim, self.observable_dim+self.act_dim, bias=True))  # weights for experts
+        # actor_layers.append(nn.Linear(input_dim, self.observable_dim, bias=True))  # weights for experts
+        # actor_layers.append(nn.LayerNorm(self.observable_dim+self.act_dim))
+        # actor_layers.append(nn.RMSNorm(self.observable_dim+self.act_dim))
         ########
         self.actor = nn.Sequential(*actor_layers)
 
@@ -197,10 +203,9 @@ class MoEActorCritic(ActorCritic):
             return normalized_obs, raw_obs
         return normalized_obs
 
-    def forward(self, obs): # DEBUG Override all the functions that need actions.
+    def forward(self, obs):
         
         temp = obs.size()
-        # print(temp[1])
         assert temp[1]==235, "observation is not 235 dim"
         padded_obs = self._prep_obs(obs)
         with torch.no_grad():  
@@ -211,17 +216,33 @@ class MoEActorCritic(ActorCritic):
                 latent_z = latent_z.unsqueeze(0)
 
             experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)# (Batch, observable_dim, act_dim)
+            # extended_experts_outputs = experts_outputs
             extended_experts_outputs = extend_experts_outputs(experts_outputs, self.act_dim)
 
 
-        # print(experts_outputs.shape)
-        # print(extended_experts_outputs.size())
-        
-        # weights = self.actor(padded_obs) # isn't this should be pure observation + (KAE output + action_one_hot)?
+        # Top-k gating
+        # # logits for experts
+        # logits = self.actor(obs)  # (B, observable_dim + act_dim)
+        # # top-k gating: softmax over top-k only
+        # k = min(self.top_k, logits.shape[-1])
+        # topk_vals, topk_idx = torch.topk(logits, k=k, dim=-1)
+        # # topk_weights = torch.softmax(topk_vals, dim=-1)           # (B, k)
+        # weights = torch.zeros_like(logits)                          # (B, n_experts)
+        # weights.scatter_(-1, topk_idx, topk_vals)                # place normalized weights
+
+        # All experts gating
         weights = self.actor(obs)
+        # weights = F.softmax(weights, dim=-1)  # (B, n_experts, observable_dim + act_dim)
+        self.count += 1
+        if self.count % 50 == 0:
+            weights_mean = weights.mean(0)
+            # for i in range(self.observable_dim):
+            for i in range(self.observable_dim + self.act_dim):
+                self.writer.add_scalar(f"MoE/weights_dim_{i}", weights_mean[i], global_step=self.count//50)
+        actions = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
+        # actions = torch.sum(weights.view(-1, self.observable_dim, 1) * extended_experts_outputs, dim=1)
         
-        outputs = torch.sum(weights.view(-1, self.observable_dim+self.act_dim, 1) * extended_experts_outputs, dim=1)
-        actions = outputs[..., : self.act_dim]
+
         return actions
 
 
