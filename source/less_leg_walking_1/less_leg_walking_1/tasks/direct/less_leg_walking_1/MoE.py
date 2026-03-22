@@ -7,9 +7,11 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [64, 32]
+    actor_hidden_dims: list[int] = [128, 64] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
+    gating_hidden_dims: list[int] = [64, 32] # gating network
+    weight_hidden_dims: list[int] = [32] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
@@ -72,6 +74,8 @@ class MoEActorCritic(ActorCritic):
         self.observable_dim = kwargs.pop('observable_dim')
         self.actor_hidden_dims = kwargs.pop('actor_hidden_dims')
         self.critic_hidden_dims = kwargs.pop('critic_hidden_dims')
+        self.weight_hidden_dims = kwargs.pop('weight_hidden_dims')
+        self.gating_hidden_dims = kwargs.pop('gating_hidden_dims')
         self.padded_dim = kwargs.pop('padded_dim')
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
@@ -155,7 +159,7 @@ class MoEActorCritic(ActorCritic):
         # 2. Expert Weight Network (learns how to use KAE experts)
         expert_weight_layers = []
         input_dim = self.num_actor_obs
-        for h in [32]:
+        for h in self.weight_hidden_dims:
             expert_weight_layers.append(nn.Linear(input_dim, h))
             expert_weight_layers.append(nn.ELU())
             input_dim = h
@@ -171,7 +175,7 @@ class MoEActorCritic(ActorCritic):
         # 3. Gating Network (learns when to trust KAE vs MLP)
         gating_layers = []
         input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
-        for h in self.actor_hidden_dims:
+        for h in self.gating_hidden_dims:
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
             input_dim = h

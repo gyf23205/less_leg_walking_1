@@ -236,24 +236,42 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         # Give more rewawrd for using KAE ####################################
         # Give more reward for using KAE (observation-based skills)
-        # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)
-
-        # action norm penalty
-        action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+        # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)       
 
         # weight sensitivty
-        current_weights = self._policy_ref.last_expert_weights # [16 experts]
-        
-        if not hasattr(self, '_prev_expert_weights'):
+        # try:
+        #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+        # except: 
+        #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+
+        action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+
+        try:
+            current_weights = self._policy_ref.last_expert_weights # [16 experts]
+            weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
             self._prev_expert_weights = current_weights.clone()
+        except:
+            weight_stability = torch.zeros(self.num_envs, device=self.device)
+            try:
+                current_weights = self._policy_ref.last_expert_weights
+                self._prev_expert_weights = current_weights.clone()
+            except:    
+                pass
 
-        # Penalize the variance/jitter of the expert selection.
-        # For a phantom leg, the weights often fluctuate wildly as the network 
-        # 'searches' for feedback. This dampens that search.
-        weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+        # try:
+        #     current_weights = self._policy_ref.last_expert_weights # [16 experts]
+        #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
 
-        # Update buffer
-        self._prev_expert_weights = current_weights.clone()
+        #     # Penalize the variance/jitter of the expert selection.
+        #     # For a phantom leg, the weights often fluctuate wildly as the network 
+        #     # 'searches' for feedback. This dampens that search.
+        #     weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+
+        #     # Update buffer
+        #     self._prev_expert_weights = current_weights.clone()
+        # except:
+        #     weight_stability = torch.zeros(self.num_envs, device=self.device)
+        #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
 
 
         rewards = {
