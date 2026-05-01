@@ -91,8 +91,10 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 
 import gymnasium as gym
 import os
+import time
 import torch
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timezone
 
 import omni
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
@@ -203,8 +205,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create runner from rsl-rl
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        runner.obs_all = []  # Initialize obs_all as a runner attribute
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        runner.obs_all = []  # Same for DistillationRunner if needed
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
  
@@ -215,6 +219,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
+        assert False
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
@@ -225,7 +230,29 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # run training
     _w0 = next(p for m in [getattr(runner.alg, a) for a in dir(runner.alg) if isinstance(getattr(runner.alg, a, None), torch.nn.Module)] for p in m.parameters() if p.requires_grad).detach().clone()
 
+    _train_start = time.time()
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    _train_elapsed_s = time.time() - _train_start
+
+    _elapsed_min = _train_elapsed_s / 60.0
+    _elapsed_h = _train_elapsed_s / 3600.0
+    print(f"[INFO] Training wall-time: {_elapsed_min:.1f} min  ({_elapsed_h:.2f} h)")
+    try:
+        import yaml as _yaml
+        _timing = {
+            "walltime_seconds": float(_train_elapsed_s),
+            "walltime_minutes": float(_elapsed_min),
+            "walltime_hours": float(_elapsed_h),
+            "max_iterations": int(agent_cfg.max_iterations),
+            "start_utc": datetime.fromtimestamp(time.time() - _train_elapsed_s, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_utc": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        os.makedirs(os.path.join(log_dir, "params"), exist_ok=True)
+        with open(os.path.join(log_dir, "params", "timing.yaml"), "w") as _f:
+            _yaml.dump(_timing, _f, default_flow_style=False)
+        print(f"[INFO] Timing saved to: {os.path.join(log_dir, 'params', 'timing.yaml')}")
+    except Exception as _e:
+        print(f"[WARN] Could not save timing.yaml: {_e}")
 
     sys.__stdout__.write(f"[LEARNING?] {torch.norm(_w0 - next(p for m in [getattr(runner.alg, a) for a in dir(runner.alg) if isinstance(getattr(runner.alg, a, None), torch.nn.Module)] for p in m.parameters() if p.requires_grad)).item() > 1e-5}\n")
 
@@ -253,6 +280,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'actor': model.actor,
         'critic': model.critic,
         'obs_range': getattr(model, 'obs_range', None),
+        'obs_all': np.array(runner.obs_all).reshape(-1, 235),  # Use runner.obs_all instead
         # 'optimizer_state': runner.alg.optimizer.state_dict() if hasattr(runner.alg, 'optimizer') else None,
         # 'agent_config': agent_cfg,
         # 'env_config': env_cfg,

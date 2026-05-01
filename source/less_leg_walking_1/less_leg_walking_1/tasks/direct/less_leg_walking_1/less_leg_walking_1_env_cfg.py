@@ -84,8 +84,8 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     episode_length_s = 20.0
     decimation = 4
     action_scale = 0.5
-    action_space = 12  # With 3 channels being zeroed out for the missing leg
-    observation_space = 235  # 235 to 226
+    action_space = 12
+    observation_space = 235
     state_space = 0
 
     logger = "wandb"                    # enable wandb logger
@@ -129,7 +129,7 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     )
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1024, env_spacing=4.0, replicate_physics=True)
 
     # events
     events: EventCfg = EventCfg()
@@ -153,6 +153,10 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     flat_orientation_reward_scale = -1.0  # Further reduced as 3-leg robot needs to tilt
     stability_reward_scale = 0.5  # Reduced to not dominate other rewards
     forward_progress_reward_scale = 2.0  # New reward for forward progress
+    # penalty for large raw action norms (MoE sidecar, keep negative to penalize)
+    action_norm_scale = -0.1
+    # sensitivity penalty for rapid changes in expert-selection weights (MoE); name kept as used in code
+    weight_sensitivty_scale = -0.1
 
     # we add a height scanner for perceptive locomotion
     height_scanner = RayCasterCfg(
@@ -168,7 +172,7 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
 @configclass
 class LessLegWalkingRoughEnvCfg(LessLegWalkingFlatEnvCfg):
     # env
-    observation_space = 235  # Changed from 235 to 226 (reduced by 9 for missing leg)
+    observation_space = 235
 
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
@@ -198,6 +202,212 @@ class LessLegWalkingRoughEnvCfg(LessLegWalkingFlatEnvCfg):
     #     debug_vis=False,
     #     mesh_prim_paths=["/World/ground"],
     # )
+
+    # reward scales (override from flat config)
+    flat_orientation_reward_scale = 0.0
+
+@configclass
+class AnymalCFlatEnvCfg(DirectRLEnvCfg):
+    # env
+    episode_length_s = 20.0
+    decimation = 4
+    action_scale = 0.5
+    action_space = 12
+    observation_space = 48
+    state_space = 0
+
+    # simulation
+    sim: SimulationCfg = SimulationCfg(
+        dt=1 / 200,
+        render_interval=decimation,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+    )
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=True,
+    )
+
+    # scene
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1024, env_spacing=4.0, replicate_physics=True)
+
+    # events
+    events: EventCfg = EventCfg()
+
+    # robot
+    robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    contact_sensor: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
+    )
+
+    # reward scales
+    lin_vel_reward_scale = 5.0 # 1.0
+    yaw_rate_reward_scale = 0.5
+    z_vel_reward_scale = -2.0
+    ang_vel_reward_scale = -0.05
+    joint_torque_reward_scale = -2.5e-5
+    joint_accel_reward_scale = -2.5e-7
+    action_rate_reward_scale = -0.01
+    feet_air_time_reward_scale = 0.5
+    undesired_contact_reward_scale = -1.0
+    flat_orientation_reward_scale = -5.0
+    # penalty for large raw action norms (MoE sidecar)
+    action_norm_scale = -0.1
+    # sensitivity penalty for expert-selection weights (misspelling preserved)
+    weight_sensitivty_scale = -0.1
+
+
+@configclass
+class AnymalCRoughEnvCfg(AnymalCFlatEnvCfg):
+    # env
+    observation_space = 235
+
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=ROUGH_TERRAINS_CFG,
+        max_init_terrain_level=9,
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+        ),
+        visual_material=sim_utils.MdlFileCfg(
+            mdl_path="{NVIDIA_NUCLEUS_DIR}/Materials/Base/Architecture/Shingles_01.mdl",
+            project_uvw=True,
+        ),
+        debug_vis=False,
+    )
+
+    # we add a height scanner for perceptive locomotion
+    height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
+    # reward scales (override from flat config)
+    flat_orientation_reward_scale = 0.0
+
+
+@configclass
+class AnymalJumpEnvCfg(DirectRLEnvCfg):
+    # env
+    episode_length_s = 10.0
+    decimation = 4
+    action_space = 12
+    observation_space = 37
+    state_space = 0
+
+    # simulation
+    sim: SimulationCfg = SimulationCfg(dt=1 / 200, render_interval=decimation)
+
+    # scene
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1024, env_spacing=4.0, replicate_physics=True)
+
+    # terrain
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=False,
+    )
+
+    # robot
+    robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    # control
+    action_scale = 0.45  # [rad]
+    joint_pos_noise = 0.05  # [rad]
+
+    # jump task
+    jump_height_range = (0.25, 0.45)  # [m] relative to default base height
+    jump_active_s = 0.7  # [s] duration of one jump arc
+    jump_rest_s = 0.6  # [s] standing phase between jumps
+    height_error_scale = 0.12
+    push_phase_end = 0.32
+    flight_phase_end = 0.82
+    foot_clearance_threshold_m = 0.02
+    foot_clearance_scale_m = 0.03
+    takeoff_velocity_cap_mps = 2.0
+
+    # termination
+    min_base_height = 0.20
+    max_tilt_rad = 0.90
+
+    # reward scales
+    height_reward_scale = 1.5
+    takeoff_velocity_reward_scale = 2.5
+    airborne_progress_reward_scale = 4.0
+    all_feet_airborne_bonus_scale = 2.5
+    grounded_flight_penalty_scale = -1.5
+    landing_stability_reward_scale = 1.0
+    upright_reward_scale = 0.8
+    left_right_asym_penalty_scale = -1.0
+    fore_hind_asym_penalty_scale = -0.6
+    roll_pitch_penalty_scale = -0.6
+    lateral_drift_penalty_scale = -0.25
+    yaw_rate_penalty_scale = -0.08
+    action_penalty_scale = -0.0012
+    action_rate_penalty_scale = -0.0025
+    action_penalty_pushoff_factor = 0.30
+    action_rate_penalty_pushoff_factor = 0.35
+
+class AnymalJumpRoughEnvCfg(AnymalJumpEnvCfg):
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=ROUGH_TERRAINS_CFG,
+        max_init_terrain_level=9,
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+        ),
+        visual_material=sim_utils.MdlFileCfg(
+            mdl_path="{NVIDIA_NUCLEUS_DIR}/Materials/Base/Architecture/Shingles_01.mdl",
+            project_uvw=True,
+        ),
+        debug_vis=False,
+    )
+
+    # we add a height scanner for perceptive locomotion
+    height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
 
     # reward scales (override from flat config)
     flat_orientation_reward_scale = 0.0

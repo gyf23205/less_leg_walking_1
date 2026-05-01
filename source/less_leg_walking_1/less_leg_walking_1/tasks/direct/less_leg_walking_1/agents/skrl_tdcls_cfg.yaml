@@ -1,0 +1,73 @@
+seed: 42
+
+agent:
+  class: TDCLS
+  gamma: 0.99
+  epsilon: 0.0
+  rollouts: 64
+  lr_actor: 0.0003
+  lr_T: 0.0001
+  lr_P: 0.000001
+  grad_norm_clip: 1.0          # gradient clipping for actor and T_net
+  rewards_shaper_scale: 0.1    # scale raw rewards before storing; prevents Q-value explosion
+  rebase_epoch: 200            # target-net sync every 200 update steps (was 1000)
+  experiment:
+    directory: "TDCLS"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+models:
+  separate: True
+  policy:  # actor network: outputs continuous actions
+    class: GaussianMixin
+    clip_actions: True
+    clip_log_std: True
+    min_log_std: -20.0
+    max_log_std: 2.0
+    network:
+      - name: net
+        input: STATES
+        layers: [512, 256, 128]
+        activations: elu
+    output: ACTIONS
+  T_net:  # transient Q-network: Q_T(s, a) → scalar
+    class: DeterministicMixin
+    network:
+      - name: net
+        input: STATES_ACTIONS
+        layers: [512, 256, 128]
+        activations: elu
+    output: ONE
+  target_net:  # frozen copy of T_net for TD bootstrapping
+    class: DeterministicMixin
+    network:
+      - name: net
+        input: STATES_ACTIONS
+        layers: [512, 256, 128]
+        activations: elu
+    output: ONE
+  P_net:  # permanent Q-network: Q_P(s, a) → scalar
+    class: DeterministicMixin
+    network:
+      - name: net
+        input: STATES_ACTIONS
+        layers: [512, 256, 128]
+        activations: elu
+    output: ONE
+
+# Rollout memory
+# https://skrl.readthedocs.io/en/latest/api/memories/random.html
+memory:
+  class: RandomMemory
+  # memory_size is in timesteps (rows), NOT total transitions.
+  # With 4096 envs: 1000 rows * 4096 envs = ~4M transitions stored.
+  # Allocating 100000 rows would require ~358 GiB — way too large.
+  memory_size: 1000
+
+# Sequential trainer
+# https://skrl.readthedocs.io/en/latest/api/trainers/sequential.html
+trainer:
+  class: SequentialTrainer
+  timesteps: 100000  # ~100k env steps; with 4096 envs that's ~400M transitions sampled
+  environment_info: log

@@ -1,0 +1,61 @@
+# FAME agent configuration for IsaacLab continual-learning experiments.
+#
+# Paper: "Principled Fast and Meta Knowledge Learners for Continual RL"
+#        Anand et al. (2023)
+#
+# RL backbone (Fast Learner): PPO with clipped surrogate, GAE, shared MLP
+# (mirrors the train-from-scratch PPO baseline architecture exactly).
+# Meta Learner: DiagGaussianActor + DoubleQCritic (SAC-style), distilled
+# from the fast learner via WD loss on (mu, std).
+
+seed: 42
+
+agent:
+  # ── Learning rates ────────────────────────────────────────────────────────
+  lr_actor:  3.0e-4
+  lr_critic: 1.0e-3
+  lr_meta:   1.0e-3
+
+  # ── PPO hyper-parameters ──────────────────────────────────────────────────
+  gamma:          0.99
+  gae_lambda:     0.95
+  clip_ratio:     0.2
+  entropy_coef:   0.005
+  value_coef:     1.0
+  grad_norm_clip: 1.0
+
+  # ── PPO update schedule ───────────────────────────────────────────────────
+  # rollout_steps: env-step rows per rollout (same as IsaacLab PPO baseline).
+  # With num_envs=1024: 24 rows × 1024 envs = 24 576 transitions per update.
+  rollout_steps:   24
+  ppo_epochs:       5
+  mini_batch_size: 4096
+
+  # ── Reward scaling ────────────────────────────────────────────────────────
+  rewards_shaper_scale: 1.0
+
+  # ── Distillation buffer sizes ─────────────────────────────────────────────
+  size_fast2meta: 100000
+  size_meta:      500000
+
+  # ── Network architecture ──────────────────────────────────────────────────
+  # Matches train-from-scratch PPO baseline: [512, 256, 128]
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  # NOTE: original FAME Metaworld defaults (hidden_dim=256, depth=2) were:
+  # hidden_dims: [256, 256]
+
+  # ── FAME detection & meta-update ─────────────────────────────────────────
+  detection_step: 1200
+  epoch_meta: 200
+  meta_lr_scheduler_gamma: 0.95
+  reset: true
+  warmstep: 50000
+  lambda_reg: 1.0
+
+  # ── Experiment bookkeeping ────────────────────────────────────────────────
+  experiment:
+    directory: "FAME"
+    experiment_name: ""
+    write_interval: 1000
+    checkpoint_interval: 50000

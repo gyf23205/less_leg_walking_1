@@ -6,8 +6,6 @@
 import gymnasium as gym
 
 from . import agents
-# Existing imports...
-from .MoE import MoEActorCritic  # Add this to make the class available
 ##
 # Register Gym environments.
 ##
@@ -21,6 +19,8 @@ gym.register(
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LessLegWalkingFlatPPORunnerCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
+        "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
     },
 )
@@ -34,6 +34,68 @@ gym.register(
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LessLegWalkingRoughPPORunnerCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
+        "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Less-AnymalC-Rough-Walking-Direct-v1",
+    entry_point=f"{__name__}.less_leg_walking_1_env:AnymalCEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.less_leg_walking_1_env_cfg:AnymalCRoughEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalCRoughPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
+        "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Less-AnymalC-Flat-Walking-Direct-v1",
+    entry_point=f"{__name__}.less_leg_walking_1_env:AnymalCEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.less_leg_walking_1_env_cfg:AnymalCFlatEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalCFlatPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
+        "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Less-AnymalC-Jump-Direct-v1",
+    entry_point=f"{__name__}.less_leg_walking_1_env:AnymalJumpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.less_leg_walking_1_env_cfg:AnymalJumpEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalJumpPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
+        "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Less-AnymalC-Jump-Rough-Direct-v1",
+    entry_point=f"{__name__}.less_leg_walking_1_env:AnymalJumpEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.less_leg_walking_1_env_cfg:AnymalJumpRoughEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalJumpPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
+        "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
     },
 )

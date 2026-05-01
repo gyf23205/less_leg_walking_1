@@ -1,19 +1,19 @@
-import torch
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+import numpy as np
 
-B = 4
-A = torch.randn(B, 9, requires_grad=True)
+ea = EventAccumulator("logs/rsl_rl/anymal_c_rough/2026-02-03_11-13-59/events.out.tfevents.1770135247.isengard.2797158.0")
+ea.Reload()
 
-# Indices in the output that will be filled by A
-out_indices = torch.tensor([0, 1, 3, 4, 5, 8, 9, 10, 11])
+# List available scalar tags
+print(ea.Tags()["scalars"])
 
-# Allocate output
-Y = torch.zeros(B, 12, device=A.device, dtype=A.dtype)
+# Read a tag
+events = ea.Scalars("Train/mean_reward")
+steps  = np.array([e.step  for e in events])
+values = np.array([e.value for e in events])
 
-# Fill non-zero positions
-Y[:, out_indices] = A
-
-# Test differentiability
-loss = Y.sum()
-loss.backward()
-
-print(A.grad)  
+# Numpy computations
+mean   = np.mean(values)
+std    = np.std(values)
+smooth = np.convolve(values, np.ones(20)/20, mode='valid')   # moving average
+print(f"Mean: {mean}, Std: {std}, Smooth: {smooth}")

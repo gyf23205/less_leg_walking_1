@@ -3,7 +3,7 @@ from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 
 @configclass
 class ResCfg(RslRlPpoActorCriticCfg):
-    """Configuration for the custom MoE policy."""
+    """Configuration for the custom ResNet policy."""
     # raw_obs_dim: int = 226
     # hidden_dim_moe: list[int] = [512, 256, 128]
     original_policy_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
@@ -29,7 +29,7 @@ except ImportError:  # fallback if tensordict version differs
 from importlib import import_module
 
 class ResActorCritic(ActorCritic):
-    def __init__(self, num_actor_obs, num_critic_obs, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
+    def __init__(self, obs, obs_groups, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
         # print(kwargs)
         self.n_experts = n_experts
        
@@ -52,8 +52,8 @@ class ResActorCritic(ActorCritic):
         critic_obs_norm = bool(kwargs.pop("critic_obs_normalization"))
 
         super().__init__(
-            num_actor_obs,
-            num_critic_obs,
+            obs,
+            obs_groups,
             num_actions,
             activation=activation,
             actor_hidden_dims=actor_hidden_dims,
@@ -83,7 +83,6 @@ class ResActorCritic(ActorCritic):
 
 
     def forward(self, obs):
-        # obs = self.get_actor_obs(obs)
         with torch.no_grad():  
             outputs_init = self.original_policy(obs) # Get hint action from original policy
         res= self.actor(obs) # Get residual from ResPolicy
