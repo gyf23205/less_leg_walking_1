@@ -248,7 +248,11 @@ class LessLegWalkingEnv(DirectRLEnv):
 
         try:
             current_weights = self._policy_ref.last_expert_weights # [16 experts]
-            weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+            # weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+            weight_stability = torch.sum(
+                torch.square(current_weights - self._prev_expert_weights).reshape(self.num_envs, -1),
+                dim=1
+            )
             self._prev_expert_weights = current_weights.clone()
         except:
             weight_stability = torch.zeros(self.num_envs, device=self.device)

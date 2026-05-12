@@ -218,17 +218,15 @@ class MoEActorCritic(ActorCritic):
                 latent_z = latent_z.unsqueeze(0)
             experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [Batch, 16, 12]
         
-        expert_weights = self.expert_constants.view(1, -1, 1)
+        expert_weights = self.expert_constants.view(1, self.observable_dim, 1)
         kae_actions = torch.sum(expert_weights * experts_outputs, dim=1)
 
         # [n_residual_experts, observable_dim]
         residual_constants = self.residual_constants
 
         # [B, n_residual_experts, observable_dim]
-        residual_latents = torch.einsum(
-            "bi,ei->bei",
-            latent_z,
-            self.residual_constants
+        residual_latents = (
+            latent_z[:, None, :] * residual_constants[None, :, :]
         )
 
         # decode all residual experts together

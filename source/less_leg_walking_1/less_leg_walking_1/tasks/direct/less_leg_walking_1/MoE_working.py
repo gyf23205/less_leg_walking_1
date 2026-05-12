@@ -7,9 +7,12 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [1] # Residual net
+    actor_hidden_dims: list[int] = [128, 64] # Residual net
+    # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
-
+    gating_hidden_dims: list[int] = [64, 32] # gating network
+    weight_hidden_dims: list[int] = [32] # wieght network
+    # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAE_original_range.pth"
     # kae_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/waypoints/new_bound2.pth"
@@ -64,7 +67,6 @@ class MoEActorCritic(ActorCritic):
     def __init__(self, obs, obs_groups, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
         self.ext = True
         self.n_experts = n_experts
-        self.n_residual_experts = 64
         self.training_steps = 0  # To track training steps for noise scheduling
        
         # Extract custom params from kwargs to avoid conflicts
@@ -72,8 +74,8 @@ class MoEActorCritic(ActorCritic):
         self.observable_dim = kwargs.pop('observable_dim')
         self.actor_hidden_dims = kwargs.pop('actor_hidden_dims')
         self.critic_hidden_dims = kwargs.pop('critic_hidden_dims')
-        #self.weight_hidden_dims = kwargs.pop('weight_hidden_dims')
-        #self.gating_hidden_dims = kwargs.pop('gating_hidden_dims')
+        self.weight_hidden_dims = kwargs.pop('weight_hidden_dims')
+        self.gating_hidden_dims = kwargs.pop('gating_hidden_dims')
         self.padded_dim = kwargs.pop('padded_dim')
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
@@ -144,11 +146,49 @@ class MoEActorCritic(ActorCritic):
 
         self.kae.eval()
 
-        # 1. Expert constants: trainable weights per observable dimension
-        self.expert_constants = nn.Parameter(torch.ones(self.observable_dim, device=self.device))
+               # 1. MLP Network (learns residual correction)
+        mlp_layers = []
+        input_dim = self.num_actor_obs
+        for h in self.actor_hidden_dims:
+            mlp_layers.append(nn.Linear(input_dim, h))
+            mlp_layers.append(nn.ELU())
+            input_dim = h
+        mlp_layers.append(nn.Linear(input_dim, self.act_dim))
+        self.mlp_network = nn.Sequential(*mlp_layers)
+        
+        # 2. Expert Weight Network (learns how to use KAE experts)
+        expert_weight_layers = []
+        input_dim = self.num_actor_obs
+        for h in self.weight_hidden_dims:
+            expert_weight_layers.append(nn.Linear(input_dim, h))
+            expert_weight_layers.append(nn.ELU())
+            input_dim = h
+        expert_weight_layers.append(nn.Linear(input_dim, self.observable_dim))
+        self.expert_weight_network = nn.Sequential(*expert_weight_layers)
+        
+        # Initialize expert weights with bias toward 1.0
+        with torch.no_grad():
+            final_layer = self.expert_weight_network[-1]
+            final_layer.weight.data.fill_(0.0)
+            final_layer.bias.data = torch.ones(self.observable_dim)
+        
+        # 3. Gating Network (learns when to trust KAE vs MLP)
+        gating_layers = []
+        input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
+        for h in self.gating_hidden_dims:
+            gating_layers.append(nn.Linear(input_dim, h))
+            gating_layers.append(nn.ELU())
+            input_dim = h
+        gating_layers.append(nn.Linear(input_dim, 1))
+        self.gating_network = nn.Sequential(*gating_layers)
 
-        # 2. Residual constants: trainable scaling for encoder output
-        self.residual_constants = nn.Parameter(torch.zeros(self.n_residual_experts, self.observable_dim, device=self.device))
+        # # Initialize the gate to strongly favor the KAE pathway at the start.
+        # # A large positive bias means sigmoid(logit) will be close to 1.0.
+        # with torch.no_grad():
+        #     self.gating_network[-1].bias.data.fill_(1.0)
+        #     # self.mlp_network[-1].weight.data.fill_(0.0)
+        #     # self.mlp_network[-1].bias.data.fill_(0.0)
+
 
     def _extract_obs_tensor(self, obs):
         if isinstance(obs, TensorDictBase):
@@ -216,43 +256,26 @@ class MoEActorCritic(ActorCritic):
             _, latent_z, _ = self.kae(padded_obs)
             if latent_z.ndim == 1:
                 latent_z = latent_z.unsqueeze(0)
-            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [Batch, 16, 12]
+            experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [B, 16, 12]
         
-        expert_weights = self.expert_constants.view(1, -1, 1)
-        kae_actions = torch.sum(expert_weights * experts_outputs, dim=1)
+        # Get weights for each KAE expert using the original, unnormalized 'obs'
+        expert_weights = self.expert_weight_network(obs)
+        kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
+        
+        # 2. MLP pathway (residual) - uses the original, unnormalized 'obs'
+        mlp_actions = self.mlp_network(obs)
+        
+        # 3. Gate decides blending - uses the original, unnormalized 'obs'
+        gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
+        gate_logit = self.gating_network(gating_input)
+        gate = torch.sigmoid(gate_logit)
+        
+        # 4. Blend the two pathways
+        actions = kae_actions + gate * mlp_actions
 
-        # [n_residual_experts, observable_dim]
-        residual_constants = self.residual_constants
-
-        # [B, n_residual_experts, observable_dim]
-        residual_latents = torch.einsum(
-            "bi,ei->bei",
-            latent_z,
-            self.residual_constants
-        )
-
-        # decode all residual experts together
-        B, N, D = residual_latents.shape
-
-        residual_outputs = self.kae.decoder(
-            residual_latents.reshape(B * N, D)
-        ).reshape(B, N, -1)
-
-        # [B, n_residual_experts, act_dim] => summation
-        residual_actions = residual_outputs[..., :self.act_dim].sum(dim=1)
-
-        actions = kae_actions + residual_actions
-
-        main_weights = self.expert_constants.unsqueeze(0).expand(B, -1)  # [B, 16]
-
-        residual_weights = self.residual_constants
-        # probably [n_residual_experts, 16]
-
-        combined_weights = main_weights + residual_weights.sum(dim=0, keepdim=True)
-        # [B, 16]
-
-        self.last_expert_weights = combined_weights.detach()
-                    
+        self.last_expert_weights = expert_weights.detach()
+            
+            
         return actions
             
        

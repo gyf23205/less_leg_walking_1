@@ -7,7 +7,7 @@ from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
-from ..MoE import MoECfg, MoEActorCritic  # Import both
+from ..MoE_new_failed import MoECfg, MoEActorCritic  # Import both
 
 
 

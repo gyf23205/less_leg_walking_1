@@ -7,7 +7,7 @@ import gymnasium as gym
 
 from . import agents
 # Existing imports...
-from .MoE import MoEActorCritic  # Add this to make the class available
+from .MoE_new_failed import MoEActorCritic  # Add this to make the class available
 ##
 # Register Gym environments.
 ##
