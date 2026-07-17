@@ -20,7 +20,7 @@ class CompoCfg(RslRlPpoActorCriticCfg):
     internal_policy_hidden_dims: list[int] = [512, 256, 128]
     actor_hidden_dims: list[int] = [512, 256, 128]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    prevs_dir: list = ["logs/rsl_rl/anymal_c_rough_leg_walking/2026-03-10_12-04-44/complete_model_with_metadata.pth"]
+    prevs_dir: list = []
     
 
 class CompoActorCritic(ActorCritic):

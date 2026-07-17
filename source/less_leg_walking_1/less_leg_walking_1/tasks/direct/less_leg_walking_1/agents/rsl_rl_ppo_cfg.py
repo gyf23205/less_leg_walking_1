@@ -24,7 +24,7 @@ from ..baselines.CompoNet import CompoCfg  # Import both
 class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 2500  # Increased for more training
-    save_interval = 100
+    save_interval = 200
     experiment_name = "less_leg_walking_flat"
     # experiment_name = "MoE16_less_leg_walking_flat"
     # experiment_name = "Residual_less_leg_walking_flat"
@@ -41,15 +41,15 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # policy = MoECfg()
 
     # USE THIS FOR COMPONENT
-    # policy = CompoCfg()
+    policy = CompoCfg()
 
     # # Train from scratch nominal policy
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
-        activation="elu",
-    )
+    # policy = RslRlPpoActorCriticCfg(
+    #     init_noise_std=1.0,
+    #     actor_hidden_dims=[512, 256, 128],
+    #     critic_hidden_dims=[512, 256, 128],
+    #     activation="elu",
+    # )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -93,7 +93,7 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
 class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 2500  # Increased for more training
-    save_interval = 100
+    save_interval = 200
     experiment_name = "anymal_c_flat_leg_walking"
     # experiment_name = "anymal_c_rough_leg_walking"
     # experiment_name = "Residual_anymal_c_rough_leg_walking"
@@ -110,15 +110,15 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # policy = MoECfg()
 
     # USE THIS FOR COMPONENT
-    # policy = CompoCfg()
+    policy = CompoCfg()
 
     # Train from scratch nominal policy
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
-        activation="elu",
-    )
+    # policy = RslRlPpoActorCriticCfg(
+    #     init_noise_std=1.0,
+    #     actor_hidden_dims=[512, 256, 128],
+    #     critic_hidden_dims=[512, 256, 128],
+    #     activation="elu",
+    # )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -158,11 +158,11 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
     )
 
 @configclass
-class AnymalJumpPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    experiment_name = "anymal_c_jump_rough"
+class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    experiment_name = "anymal_c_jump_flat"
     num_steps_per_env = 24
     max_iterations = 2500  # Increased for more training
-    save_interval = 100
+    save_interval = 200
     empirical_normalization = False
 
     ############################################
@@ -173,24 +173,44 @@ class AnymalJumpPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # policy = MoECfg()
 
     # USE THIS FOR COMPONENT
-    # policy = CompoCfg()
+    policy = CompoCfg()
 
     # Train from scratch nominal policy
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
-        activation="elu",
-    )
+    # policy = RslRlPpoActorCriticCfg(
+    #     init_noise_std=1.0,
+    #     actor_hidden_dims=[512, 256, 128],
+    #     critic_hidden_dims=[512, 256, 128],
+    #     activation="elu",
+    # )
     ############################################
-    
-    # Slightly different hyperparameters for jump terrain
+
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.008,
+        num_mini_batches=4,
+        num_learning_epochs=8,
+        learning_rate=2.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+    )
+
+
+@configclass
+class AnymalJumpRoughPPORunnerCfg(AnymalJumpFlatPPORunnerCfg):
+    experiment_name = "anymal_c_jump_rough"
+
+    # Slightly different hyperparameters for jump on rough terrain
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0, # 1.0
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.008, # 0.005 
-        num_mini_batches=8,
+        entropy_coef=0.008, # 0.005
+        num_mini_batches=4,
         num_learning_epochs=8, # 5
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",

@@ -213,7 +213,7 @@ class AnymalCFlatEnvCfg(DirectRLEnvCfg):
     decimation = 4
     action_scale = 0.5
     action_space = 12
-    observation_space = 48
+    observation_space = 235
     state_space = 0
 
     # simulation
@@ -254,6 +254,16 @@ class AnymalCFlatEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
     )
 
+    # height scanner for perceptive locomotion (used for both flat and rough terrain)
+    height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
     # reward scales
     lin_vel_reward_scale = 5.0 # 1.0
     yaw_rate_reward_scale = 0.5
@@ -273,9 +283,6 @@ class AnymalCFlatEnvCfg(DirectRLEnvCfg):
 
 @configclass
 class AnymalCRoughEnvCfg(AnymalCFlatEnvCfg):
-    # env
-    observation_space = 235
-
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="generator",
@@ -295,16 +302,6 @@ class AnymalCRoughEnvCfg(AnymalCFlatEnvCfg):
         debug_vis=False,
     )
 
-    # we add a height scanner for perceptive locomotion
-    height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
-    )
-
     # reward scales (override from flat config)
     flat_orientation_reward_scale = 0.0
 
@@ -315,7 +312,7 @@ class AnymalJumpEnvCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     decimation = 4
     action_space = 12
-    observation_space = 37
+    observation_space = 235
     state_space = 0
 
     # simulation
@@ -341,6 +338,16 @@ class AnymalJumpEnvCfg(DirectRLEnvCfg):
 
     # robot
     robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    # height scanner for perceptive locomotion (used for both flat and rough terrain)
+    height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
 
     # control
     action_scale = 0.45  # [rad]
@@ -397,16 +404,6 @@ class AnymalJumpRoughEnvCfg(AnymalJumpEnvCfg):
             project_uvw=True,
         ),
         debug_vis=False,
-    )
-
-    # we add a height scanner for perceptive locomotion
-    height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        ray_alignment="yaw",
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
     )
 
     # reward scales (override from flat config)

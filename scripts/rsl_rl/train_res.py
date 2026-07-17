@@ -31,6 +31,12 @@ parser.add_argument(
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument(
+    "--original_policy_path",
+    type=str,
+    default=None,
+    help="Path to the frozen base policy checkpoint for the residual network.",
+)
+parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
@@ -57,7 +63,7 @@ import importlib.metadata as metadata
 import platform
 
 from packaging import version
-from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.res_net import ResActorCritic, ComposedActor
 # # Make the class available in the runner module's namespace
 import rsl_rl.runners.on_policy_runner as runner_module
 runner_module.ResActorCritic = ResActorCritic
@@ -118,6 +124,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    if args_cli.original_policy_path is not None:
+        agent_cfg.policy.original_policy_path = args_cli.original_policy_path
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -142,8 +150,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
-    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # specify directory for logging runs: {method}_{run_name}
+    log_dir = "residual"
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:
@@ -198,7 +206,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
- 
+
+    # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
+    cli_args.patch_tensorboard_gradient_steps(runner)
+
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
@@ -262,8 +273,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         model = None
 
 
+    saved_actor = ComposedActor(model.original_policy, model.actor) if hasattr(model, "original_policy") else model.actor
     complete_model_data = {
-        'actor': model.actor,
+        'actor': saved_actor,
         'critic': model.critic,
         'obs_range': getattr(model, 'obs_range', None),
         # 'optimizer_state': runner.alg.optimizer.state_dict() if hasattr(runner.alg, 'optimizer') else None,

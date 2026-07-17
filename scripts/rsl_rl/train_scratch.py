@@ -211,7 +211,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner.obs_all = []  # Same for DistillationRunner if needed
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
- 
+
+    # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
+    cli_args.patch_tensorboard_gradient_steps(runner)
+
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint

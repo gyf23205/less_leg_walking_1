@@ -356,6 +356,7 @@ class AnymalCEnv(DirectRLEnv):
                 "flat_orientation_l2",
             ]
         }
+        self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
@@ -366,10 +367,9 @@ class AnymalCEnv(DirectRLEnv):
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        if isinstance(self.cfg, AnymalCRoughEnvCfg):
-            # we add a height scanner for perceptive locomotion
-            self._height_scanner = RayCaster(self.cfg.height_scanner)
-            self.scene.sensors["height_scanner"] = self._height_scanner
+        # we add a height scanner for perceptive locomotion
+        self._height_scanner = RayCaster(self.cfg.height_scanner)
+        self.scene.sensors["height_scanner"] = self._height_scanner
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -391,11 +391,9 @@ class AnymalCEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
-        height_data = None
-        if isinstance(self.cfg, AnymalCRoughEnvCfg):
-            height_data = (
-                self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-            ).clip(-1.0, 1.0)
+        height_data = (
+            self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+        ).clip(-1.0, 1.0)
         obs = torch.cat(
             [
                 tensor
@@ -464,6 +462,7 @@ class AnymalCEnv(DirectRLEnv):
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+        self._episode_full_reward += reward
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -517,6 +516,12 @@ class AnymalCEnv(DirectRLEnv):
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
             self._episode_sums[key][env_ids] = 0.0
+        # AnymalCEnv has no MoE-only penalty terms in its reward dict, so core reward equals full reward
+        full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
+        extras["train/core_mean_reward"] = full_mean
+        extras["train/full_mean_reward"] = full_mean
+        extras["train/MoE_only_reward(penality) contribution"] = 0.0
+        self._episode_full_reward[env_ids] = 0.0
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
@@ -552,6 +557,7 @@ class AnymalJumpEnv(DirectRLEnv):
         self._episode_lr_asym_sum = torch.zeros(self.num_envs, device=self.device)
         self._episode_roll_pitch_err_sum = torch.zeros(self.num_envs, device=self.device)
         self._episode_step_count = torch.zeros(self.num_envs, device=self.device)
+        self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
 
         self._default_joint_pos = self._robot.data.default_joint_pos.clone()
         self._resolve_leg_joint_mapping()
@@ -581,6 +587,8 @@ class AnymalJumpEnv(DirectRLEnv):
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
+        self._height_scanner = RayCaster(self.cfg.height_scanner)
+        self.scene.sensors["height_scanner"] = self._height_scanner
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -688,17 +696,20 @@ class AnymalJumpEnv(DirectRLEnv):
         phase = 2.0 * math.pi * t_cycle / cycle_s
         desired_z_error = (self._desired_z - self._robot.data.root_pos_w[:, 2]).unsqueeze(1)
         desired_vz_error = (self._desired_vz - self._robot.data.root_lin_vel_w[:, 2]).unsqueeze(1)
+        jump_commands = torch.cat([desired_z_error, desired_vz_error, phase.unsqueeze(1)], dim=-1)
+        height_data = (
+            self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+        ).clip(-1.0, 1.0)
         obs = torch.cat(
             [
                 self._robot.data.root_lin_vel_b,
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
-                self._robot.data.joint_pos,
+                jump_commands,
+                self._robot.data.joint_pos - self._default_joint_pos,
                 self._robot.data.joint_vel,
-                desired_z_error,
-                desired_vz_error,
-                torch.sin(phase).unsqueeze(1),
-                torch.cos(phase).unsqueeze(1),
+                height_data,
+                self._actions,
             ],
             dim=-1,
         )
@@ -815,6 +826,7 @@ class AnymalJumpEnv(DirectRLEnv):
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+        self._episode_full_reward += reward
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -839,6 +851,12 @@ class AnymalJumpEnv(DirectRLEnv):
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
             self._episode_sums[key][env_ids] = 0.0
+        # AnymalJumpEnv has no MoE-only penalty terms in its reward dict, so core reward equals full reward
+        full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
+        extras["train/core_mean_reward"] = full_mean
+        extras["train/full_mean_reward"] = full_mean
+        extras["train/MoE_only_reward(penality) contribution"] = 0.0
+        self._episode_full_reward[env_ids] = 0.0
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()

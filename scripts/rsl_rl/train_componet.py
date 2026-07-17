@@ -42,6 +42,13 @@ parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
+parser.add_argument(
+    "--prevs_dir",
+    type=str,
+    nargs="+",
+    default=None,
+    help="Checkpoint paths of previous stages' CompoNet actors, in order, for the growing composition chain.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -128,6 +135,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    if args_cli.prevs_dir is not None:
+        agent_cfg.policy.prevs_dir = args_cli.prevs_dir
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -152,8 +161,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
-    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # specify directory for logging runs: fixed name per training method for cross-method comparison
+    log_dir = "componet"
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:
@@ -210,7 +219,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # runner.obs_all = []  # Same for DistillationRunner if needed
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
- 
+
+    # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
+    cli_args.patch_tensorboard_gradient_steps(runner)
+
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint

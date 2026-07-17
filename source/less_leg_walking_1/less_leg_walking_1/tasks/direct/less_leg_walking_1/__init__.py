@@ -77,7 +77,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.less_leg_walking_1_env_cfg:AnymalJumpEnvCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalJumpPPORunnerCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalJumpFlatPPORunnerCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
         "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
         "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",
@@ -92,7 +92,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.less_leg_walking_1_env_cfg:AnymalJumpRoughEnvCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalJumpPPORunnerCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AnymalJumpRoughPPORunnerCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
         "skrl_tdcls_cfg_entry_point": f"{agents.__name__}:skrl_tdcls_cfg.yaml",
         "skrl_fame_cfg_entry_point": f"{agents.__name__}:skrl_fame_cfg.yaml",

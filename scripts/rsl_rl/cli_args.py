@@ -89,3 +89,31 @@ def update_rsl_rl_cfg(agent_cfg: RslRlBaseRunnerCfg, args_cli: argparse.Namespac
         agent_cfg.neptune_project = args_cli.log_project_name
 
     return agent_cfg
+
+
+def patch_tensorboard_gradient_steps(runner) -> None:
+    """Rescale rsl_rl's TensorBoard x-axis from PPO/Distillation `it` (iteration count) to the
+    cumulative number of optimizer.step() calls, so runs with different num_learning_epochs /
+    num_mini_batches / gradient_length remain directly comparable at equal x-axis values.
+    """
+    from torch.utils.tensorboard import SummaryWriter
+
+    alg = runner.alg
+    if hasattr(alg, "num_mini_batches"):  # PPO
+        updates_per_iter = alg.num_learning_epochs * alg.num_mini_batches
+    elif hasattr(alg, "gradient_length"):  # Distillation
+        updates_per_iter = (alg.num_learning_epochs * runner.num_steps_per_env) // alg.gradient_length
+    else:
+        raise ValueError(f"Don't know how to compute gradient-update count for algorithm {type(alg)}")
+
+    if updates_per_iter <= 0:
+        raise ValueError(f"Computed non-positive updates_per_iter={updates_per_iter}")
+
+    original_add_scalar = SummaryWriter.add_scalar
+
+    def add_scalar(self, tag, scalar_value, global_step=None, *args, **kwargs):
+        if global_step is not None and not str(tag).endswith("/time"):
+            global_step = int(global_step * updates_per_iter)
+        return original_add_scalar(self, tag, scalar_value, global_step, *args, **kwargs)
+
+    SummaryWriter.add_scalar = add_scalar

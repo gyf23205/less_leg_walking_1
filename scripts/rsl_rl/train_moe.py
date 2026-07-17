@@ -198,6 +198,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+
+    # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
+    cli_args.patch_tensorboard_gradient_steps(runner)
+
     print("policy class_name:", agent_cfg.policy.class_name)
     print("runner class_name:", agent_cfg.class_name)
 

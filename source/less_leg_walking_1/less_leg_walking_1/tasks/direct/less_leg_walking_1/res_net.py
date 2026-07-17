@@ -18,6 +18,7 @@ class ResCfg(RslRlPpoActorCriticCfg):
     critic_obs_normalization: bool = False
 
 import torch
+import torch.nn as nn
 from torch.serialization import add_safe_globals
 from rsl_rl.modules import ActorCritic
 try:
@@ -27,6 +28,19 @@ except ImportError:  # fallback if tensordict version differs
 
 # import sys
 from importlib import import_module
+
+
+class ComposedActor(nn.Module):
+    """Frozen composition of a base policy and its trained residual, so the result can itself serve as the next stage's base policy."""
+
+    def __init__(self, base_policy, residual_policy):
+        super().__init__()
+        self.base_policy = base_policy
+        self.residual_policy = residual_policy
+
+    def forward(self, obs):
+        return self.base_policy(obs) + self.residual_policy(obs)
+
 
 class ResActorCritic(ActorCritic):
     def __init__(self, obs, obs_groups, num_actions, n_experts=None, **kwargs):  # Accept additional kwargs from cfg
