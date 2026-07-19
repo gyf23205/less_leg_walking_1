@@ -14,9 +14,9 @@ class MoECfg(RslRlPpoActorCriticCfg):
     weight_hidden_dims: list[int] = [32] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
 
-    kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
-
-
+    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
+    kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
+   
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
