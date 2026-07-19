@@ -9,7 +9,7 @@ sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
 """Script to train RL agent with RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""
-
+ 
 import argparse
 import sys
 
