@@ -235,7 +235,7 @@ class PPOActor(nn.Module):
     def forward(self, obs: torch.Tensor) -> torch.distributions.Normal:
         """Return an un-squashed Normal distribution."""
         mu  = self.trunk(obs)
-        std = self.log_std.exp().expand_as(mu)
+        std = self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX).exp().expand_as(mu)
         return torch.distributions.Normal(mu, std)
 
     def evaluate(
@@ -250,7 +250,7 @@ class PPOActor(nn.Module):
     def get_dist_params(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Return ``(mu, std)`` for meta WD distillation."""
         mu  = self.trunk(obs)
-        std = self.log_std.exp().expand_as(mu)
+        std = self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX).exp().expand_as(mu)
         return mu, std
 
 
