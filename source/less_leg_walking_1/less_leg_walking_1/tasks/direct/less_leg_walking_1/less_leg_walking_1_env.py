@@ -85,8 +85,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone()
-        
+        self._actions = actions.clone().clamp(-1.0, 1.0)
+
         self._actions[:, [2, 6, 10]] = 0.0
         self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
         self._previous_actions_KAE = self.full_action_for_KAE.clone()
@@ -383,7 +383,7 @@ class AnymalCEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone()
+        self._actions = actions.clone().clamp(-1.0, 1.0)
         self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
 
     def _apply_action(self):
