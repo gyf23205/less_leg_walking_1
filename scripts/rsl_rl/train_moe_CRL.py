@@ -14,26 +14,63 @@ train_tasks = [
     #"Less-AnymalC-Jump-Direct-v1",
     #"Less-AnymalC-Jump-Rough-Direct-v1",
 ]
+completed_tasks = [original_task]
 
 kae_path = Path(
     "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs"
 )
 
 
-class ActionLogger:
+# class ActionLogger:
+#     def __init__(self, env, log_dir):
+#         self.original_step = env.step
+#         self.actions = []
+#         self.log_dir = log_dir
+#         env.step = self.step
+
+#     def step(self, actions):
+#         self.actions.append(actions.detach().cpu())
+#         return self.original_step(actions)
+
+#     def save(self):
+#         action_file = os.path.join(self.log_dir, "actions.pt")
+#         torch.save(torch.stack(self.actions), action_file)
+
+class ObservationLogger:
     def __init__(self, env, log_dir):
+        self.env = env
         self.original_step = env.step
-        self.actions = []
+        self.observations = []
         self.log_dir = log_dir
         env.step = self.step
 
+    def get_policy_observation(self):
+        observations = self.env.get_observations()
+
+        if isinstance(observations, tuple):
+            observations = observations[0]
+
+        if hasattr(observations, "get"):
+            policy_observation = observations.get("policy")
+
+            if policy_observation is not None:
+                observations = policy_observation
+
+        return observations
+
     def step(self, actions):
-        self.actions.append(actions.detach().cpu())
+        observations = self.get_policy_observation()
+        self.observations.append(observations.detach().cpu())
         return self.original_step(actions)
 
     def save(self):
-        action_file = os.path.join(self.log_dir, "actions.pt")
-        torch.save(torch.stack(self.actions), action_file)
+        observation_file = os.path.join(
+            self.log_dir,
+            "observations.pt",
+        )
+
+        observations = torch.cat(self.observations, dim=0)
+        torch.save(observations, observation_file)
 
 def get_run_directories():
     run_directories = set()
@@ -60,12 +97,14 @@ def get_final_model(run_directory):
 
 def copy_results(task_name, run_directory):
     model_file = get_final_model(run_directory)
-    action_file = run_directory / "actions.pt"
-    if not action_file.is_file():
-        raise FileNotFoundError(str(action_file))
+    observation_file = run_directory / "observations.pt"
+    if not observation_file.is_file():
+        raise FileNotFoundError(str(observation_file))
 
-    shutil.copy2(model_file, kae_path / (task_name + "_policy.pt"))
-    shutil.copy2(action_file, kae_path / (task_name + "_actions.pt"))
+    shutil.copy2(
+        observation_file,
+        kae_path / (task_name + "_observations.pt"),
+        )
 
 def main():
     kae_path.mkdir(parents=True, exist_ok=True)
@@ -82,8 +121,9 @@ def main():
         command.extend(train_arguments)
 
         environment = os.environ.copy()
-        environment["CRL_ACTION_LOG"] = "1"
+        environment["CRL_OBSERVATION_LOG"] = "1"
         environment["CRL_TASK_NAME"] = task_name
+        environment["CRL_KAE_TASKS"] = "|".join(completed_tasks)
 
         print("[CRL] Training:", task_name)
         subprocess.run(command, env=environment, check=True)
