@@ -158,17 +158,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    # load previously trained model
+    # build a runner with freshly initialized weights; how it gets populated depends on
+    # whether the checkpoint is a standard rsl-rl checkpoint or train_moe.py's custom
+    # "complete_model_with_metadata.pth" (which stores raw 'actor'/'critic' modules).
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
-    runner.load(resume_path)
-
-    # obtain the trained policy for inference
-    policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # extract the neural network module
     # we do this in a try-except to maintain backwards compatibility.
@@ -178,6 +176,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     except AttributeError:
         # version 2.2 and below
         policy_nn = runner.alg.actor_critic
+
+    checkpoint = torch.load(resume_path, map_location=agent_cfg.device, weights_only=False)
+    use_custom_actor = isinstance(checkpoint, dict) and "actor" in checkpoint
+
+    if use_custom_actor:
+        # custom checkpoint saved by train_moe.py: {"actor": model.actor, "critic": model.critic, "obs_range": ...}
+        print("[INFO]: Detected custom checkpoint format, loading 'actor' module directly as the policy.")
+        policy_nn.actor = checkpoint["actor"].to(agent_cfg.device)
+        if checkpoint.get("critic") is not None:
+            policy_nn.critic = checkpoint["critic"].to(agent_cfg.device)
+        policy_nn.eval()
+
+        def policy(obs):
+            with torch.no_grad():
+                obs_t = policy_nn.get_actor_obs(obs)
+                obs_t = policy_nn.actor_obs_normalizer(obs_t)
+                return policy_nn.actor(obs_t)
+
+    else:
+        runner.load(resume_path)
+        # obtain the trained policy for inference
+        policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # disable normalizers to avoid 226->256 mismatch during play
     # Note: 'policy' is a bound method, so we must modify 'policy_nn' (the module)
@@ -209,8 +229,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            obs["policy"] = _pad_to_dim(obs["policy"], 256)
-            actions = policy(obs)          
+            if not use_custom_actor:
+                obs["policy"] = _pad_to_dim(obs["policy"], 256)
+            actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:
