@@ -157,9 +157,11 @@ def train_and_save_kae(
     observable_dim=16,
     padded_dimension=256,
     hidden_dim=256,
-    sample_count=50000,
+    sample_count=100000,
     batch_size=2048,
-    num_epochs=3000, # 3000
+    num_epochs=2000, #total epoch
+    epochs_schedule = [600, 1200],
+    epochs_schedule_lr = [1e-3, 1e-4, 1e-5]
 ):
     device = torch.device(device)
 
@@ -238,31 +240,58 @@ def train_and_save_kae(
     mse = nn.MSELoss()
 
     for epoch in range(num_epochs):
-        if epoch > 2000:
-            learning_rate = 1e-5
-        elif epoch > 1000:
-            learning_rate = 1e-4
+        if epoch > epochs_schedule[1]:
+            learning_rate = epochs_schedule_lr[2]
+        elif epoch > epochs_schedule[0]:
+            learning_rate = epochs_schedule_lr[1]
         else:
-            learning_rate = 1e-3
+            learning_rate = epochs_schedule_lr[0]
 
         for parameter_group in optimizer.param_groups:
             parameter_group["lr"] = learning_rate
+
+        running_loss = 0.0
+        running_reconstruction_loss = 0.0
+        running_prediction_loss = 0.0
+        running_latent_loss = 0.0
+        running_action_loss = 0.0
 
         for batch_observations, batch_actions in loader:
             reconstructed, latent_observations, predicted_actions = model(
                 batch_observations
             )
-            latent_actions = model.encoder(batch_actions)
-            predicted_latent = latent_observations @ model.K.T
-
-            kae_loss = (
-                mse(reconstructed, batch_observations)
-                + mse(predicted_actions, batch_actions)
-                + mse(predicted_latent, latent_actions)
+            latent_actions = model.encoder(
+                batch_actions
             )
+
+            predicted_latent = (
+                latent_observations @ model.K.T
+            )
+
+            reconstruction_loss = mse(
+                reconstructed,
+                batch_observations,
+            )
+
+            prediction_loss = mse(
+                predicted_actions,
+                batch_actions,
+            )
+
+            latent_loss = mse(
+                predicted_latent,
+                latent_actions,
+            )
+
             action_loss = mse(
                 predicted_actions[:, :action_dim],
                 batch_actions[:, :action_dim],
+            )
+
+            kae_loss = (
+                reconstruction_loss
+                + prediction_loss
+                + latent_loss
             )
             loss = 0.1 * kae_loss + 0.9 * action_loss
 
@@ -270,6 +299,20 @@ def train_and_save_kae(
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+
+            running_loss += loss.detach().item()
+            running_reconstruction_loss += (
+                reconstruction_loss.detach().item()
+            )
+            running_prediction_loss += (
+                prediction_loss.detach().item()
+            )
+            running_latent_loss += (
+                latent_loss.detach().item()
+            )
+            running_action_loss += (
+                action_loss.detach().item()
+            )
 
             with torch.no_grad():
                 all_input_latent = model.encoder(padded_observations)
@@ -279,8 +322,29 @@ def train_and_save_kae(
                     all_output_latent,
                 )
 
+        batch_count = len(loader)
+
+        average_loss = (
+            running_loss / batch_count
+        )
+
         if epoch == 0 or (epoch + 1) % 100 == 0:
-            print("[KAE]", task_name, "epoch", epoch + 1, "loss", loss.item())
+            print(
+                "[KAE]",
+                task_name,
+                "epoch",
+                epoch + 1,
+                "total",
+                average_loss,
+                "    ||  reconstruction",
+                running_reconstruction_loss / batch_count,
+                "prediction",
+                running_prediction_loss / batch_count,
+                "latent",
+                running_latent_loss / batch_count,
+                "action",
+                running_action_loss / batch_count,
+            )
 
     kae_directory = Path(kae_directory)
     kae_directory.mkdir(parents=True, exist_ok=True)
