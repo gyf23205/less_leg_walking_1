@@ -488,7 +488,10 @@ class MoEActorCritic(ActorCritic):
         gate = torch.sigmoid(gate_logit)
         
         # 4. Blend the two pathways
-        actions = kae_actions + gate * mlp_actions
+        actions = (
+            gate * kae_actions
+            + (1.0 - gate) * mlp_actions
+        )
 
         self.last_expert_weights = expert_weights.detach()
             
