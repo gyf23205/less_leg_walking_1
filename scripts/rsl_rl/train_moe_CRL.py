@@ -6,8 +6,8 @@ from pathlib import Path
 
 import torch
 
-ORIGINAL_TASK = "Less-AnymalC-Rough-Walking-Direct-v1"
-TRAIN_TASKS = [
+ORIGINAL_TASK = "Less-AnymalC-Rough-Walking-Direct-v1" # Assume the original task's 'KAE' is given
+TRAIN_TASKS = [ # train in this order
      "Less-Leg-Flat-Walking-Direct-v1",
     # "Less-Leg-Rough-Walking-Direct-v1",
      "Less-AnymalC-Jump-Direct-v1",
