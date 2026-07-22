@@ -184,6 +184,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+
+    crl_mode = os.environ.get("CRL_MODE") == "1"
+    observation_logger = None
+
+    if crl_mode:
+        from train_moe_CRL import ObservationLogger
+
+        observation_logger = ObservationLogger(
+            env,
+            log_dir,
+        )
+
+# # DEBUG
     
     # # DEBUG
     # print("Obs space:", env.observation_space)
@@ -224,6 +237,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     _train_start = time.time()
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
     _train_elapsed_s = time.time() - _train_start
+
+    observation_file = None
+
+    if crl_mode:
+        observation_file = observation_logger.save()
+
+        print(
+            "[CRL] Observations saved to:",
+            observation_file,
+        )
 
     _elapsed_min = _train_elapsed_s / 60.0
     _elapsed_h = _train_elapsed_s / 3600.0
@@ -282,6 +305,47 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     complete_model_path = os.path.join(log_dir, "complete_model_with_metadata.pth")
     torch.save(complete_model_data, complete_model_path)
     print(f"[INFO]: Complete model with metadata saved to: {complete_model_path}")
+
+    if crl_mode:
+        import importlib.util
+
+        kae_approx_file = os.environ[
+            "CRL_KAE_APPROX_FILE"
+        ]
+
+        module_spec = importlib.util.spec_from_file_location(
+            "crl_kae_approx",
+            kae_approx_file,
+        )
+
+        if (
+            module_spec is None
+            or module_spec.loader is None
+        ):
+            raise ImportError(
+                "Unable to load KAE_approx.py: "
+                + kae_approx_file
+            )
+
+        kae_module = importlib.util.module_from_spec(
+            module_spec
+        )
+
+        module_spec.loader.exec_module(
+            kae_module
+        )
+
+        kae_module.train_and_save_kae(
+            task_name=os.environ[
+                "CRL_TASK_NAME"
+            ],
+            policy=model,
+            observation_file=observation_file,
+            kae_directory=os.environ[
+                "CRL_KAE_DIRECTORY"
+            ],
+            device=agent_cfg.device,
+        )
 
     # close the simulator
     env.close()
