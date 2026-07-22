@@ -159,7 +159,7 @@ def train_and_save_kae(
     hidden_dim=256,
     sample_count=50000,
     batch_size=2048,
-    num_epochs=10, # 3000
+    num_epochs=3000, # 3000
 ):
     device = torch.device(device)
 
