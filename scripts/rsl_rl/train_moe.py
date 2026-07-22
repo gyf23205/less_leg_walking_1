@@ -184,10 +184,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-
-    if os.environ.get("CRL_ACTION_LOG") == "1":
-        from train_moe_CRL import ObservationLogger
-        observation_logger = ObservationLogger(env, log_dir)
     
     # # DEBUG
     # print("Obs space:", env.observation_space)
@@ -288,8 +284,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     print(f"[INFO]: Complete model with metadata saved to: {complete_model_path}")
 
     # close the simulator
-    if os.environ.get("CRL_ACTION_LOG") == "1":
-        observation_logger.save()
     env.close()
 
 

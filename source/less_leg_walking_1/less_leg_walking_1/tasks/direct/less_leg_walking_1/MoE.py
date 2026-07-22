@@ -2,29 +2,6 @@ from pytest import param
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 
-import os
-from pathlib import Path
-
-KAE_DIRECTORY = Path(
-    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
-    "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs"
-)
-DEFAULT_KAE_PATH = KAE_DIRECTORY / "ForMOE_p1_pad256_obv16.pth"
-
-
-def get_kae_path():
-    task_name = os.environ.get("CRL_TASK_NAME")
-
-    if task_name is None:
-        return str(DEFAULT_KAE_PATH)
-
-    task_kae_path = KAE_DIRECTORY / (task_name + "_KAE.pth")
-
-    if task_kae_path.is_file():
-        return str(task_kae_path)
-
-    return str(DEFAULT_KAE_PATH)
-
 @configclass
 class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
@@ -36,9 +13,10 @@ class MoECfg(RslRlPpoActorCriticCfg):
     gating_hidden_dims: list[int] = [64, 32] # gating network
     weight_hidden_dims: list[int] = [32] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
-  
-    kae_path: str = get_kae_path()
 
+    # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
+    kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
+   
     device: str = "cuda"
     n_experts: int = 1
     p: int = 1
