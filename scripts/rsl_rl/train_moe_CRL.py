@@ -28,11 +28,20 @@ KAE_APPROX_FILE = (
 )
 
 class ObservationLogger:
-    def __init__(self, env, log_dir):
+    def __init__(
+        self,
+        env,
+        log_dir,
+        max_samples=15000,
+    ):
         self.env = env
         self.original_step = env.step
         self.log_dir = Path(log_dir)
-        self.observations = []
+        self.max_samples = max_samples
+
+        self.buffer = None
+        self.sample_count = 0
+        self.write_index = 0
 
         env.step = self.step
 
@@ -42,39 +51,102 @@ class ObservationLogger:
         if isinstance(observations, tuple):
             observations = observations[0]
 
-        if isinstance(observations, dict):
-            observations = observations["policy"]
+        if hasattr(observations, "get"):
+            policy_observation = observations.get("policy")
+
+            if policy_observation is not None:
+                observations = policy_observation
+
+        if not torch.is_tensor(observations):
+            raise TypeError(
+                "Policy observation must be a Tensor."
+            )
 
         return observations
 
     def step(self, actions):
         observations = self.get_policy_observation()
 
-        self.observations.append(
-            observations.detach().cpu()
+        observations = observations.detach()
+        observations = observations.reshape(
+            -1,
+            observations.shape[-1],
         )
+        observations = observations.cpu()
+
+        if self.buffer is None:
+            self.buffer = torch.empty(
+                self.max_samples,
+                observations.shape[-1],
+                dtype=observations.dtype,
+            )
+
+        if observations.shape[0] >= self.max_samples:
+            observations = observations[
+                -self.max_samples:
+            ]
+
+            self.buffer.copy_(observations)
+            self.sample_count = self.max_samples
+            self.write_index = 0
+
+        else:
+            first_count = min(
+                observations.shape[0],
+                self.max_samples - self.write_index,
+            )
+
+            self.buffer[
+                self.write_index:
+                self.write_index + first_count
+            ].copy_(
+                observations[:first_count]
+            )
+
+            remaining_count = (
+                observations.shape[0] - first_count
+            )
+
+            if remaining_count > 0:
+                self.buffer[
+                    :remaining_count
+                ].copy_(
+                    observations[first_count:]
+                )
+
+            self.write_index = (
+                self.write_index
+                + observations.shape[0]
+            ) % self.max_samples
+
+            self.sample_count = min(
+                self.max_samples,
+                self.sample_count
+                + observations.shape[0],
+            )
 
         return self.original_step(actions)
 
     def save(self):
-        if not self.observations:
+        if self.buffer is None:
             raise RuntimeError(
-                "No policy observations were recorded."
+                "No observations were recorded."
             )
 
         observation_file = (
             self.log_dir / "observations.pt"
         )
 
-        observations = torch.cat(
-            self.observations,
-            dim=0,
-        )
+        observations = self.buffer[
+            :self.sample_count
+        ].clone()
 
         torch.save(
             observations,
             observation_file,
         )
+
+        self.buffer = None
 
         return observation_file
 
