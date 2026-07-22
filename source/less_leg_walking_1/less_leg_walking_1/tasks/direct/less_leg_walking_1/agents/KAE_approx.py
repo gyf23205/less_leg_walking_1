@@ -63,18 +63,89 @@ class KoopmanAutoencoderWalk(nn.Module):
 
 
 def load_kae(checkpoint_file, device):
+    import sys
+    import types
+
+    legacy_module = types.ModuleType(
+        "Autoencoder"
+    )
+
+    legacy_module.Encoder_walk = (
+        EncoderWalk
+    )
+
+    legacy_module.Decoder = Decoder
+
+    legacy_module.KoopmanAutoencoder_walk = (
+        KoopmanAutoencoderWalk
+    )
+
+    if "Autoencoder" not in sys.modules:
+        sys.modules["Autoencoder"] = (
+            legacy_module
+        )
+
     checkpoint = torch.load(
         checkpoint_file,
         map_location=device,
-        weights_only=True,
+        weights_only=False,
     )
+
+    if isinstance(checkpoint, nn.Module):
+        return checkpoint.to(device)
+
+    if not isinstance(checkpoint, dict):
+        raise TypeError(
+            "Unsupported KAE checkpoint type: "
+            + str(type(checkpoint))
+        )
+
     model = KoopmanAutoencoderWalk(
         checkpoint["state_dim"],
         checkpoint["hidden_dim"],
         checkpoint["observable_dim"],
     )
-    model.load_state_dict(checkpoint["state_dict"])
+
+    model.load_state_dict(
+        checkpoint["state_dict"]
+    )
+
     return model.to(device)
+
+def get_observation_tensor(observations):
+    while not torch.is_tensor(observations):
+        if not hasattr(observations, "keys"):
+            raise TypeError(
+                "Observation history must contain a Tensor."
+            )
+
+        keys = list(observations.keys())
+
+        if "policy" in keys:
+            observations = observations["policy"]
+            continue
+
+        if "obs" in keys:
+            observations = observations["obs"]
+            continue
+
+        tensor_keys = []
+
+        for key in keys:
+            value = observations[key]
+
+            if torch.is_tensor(value):
+                tensor_keys.append(key)
+
+        if len(tensor_keys) != 1:
+            raise KeyError(
+                "Could not identify the policy observation Tensor. "
+                f"Available keys: {keys}"
+            )
+
+        observations = observations[tensor_keys[0]]
+
+    return observations
 
 
 def train_and_save_kae(
@@ -88,22 +159,44 @@ def train_and_save_kae(
     hidden_dim=256,
     sample_count=50000,
     batch_size=2048,
-    num_epochs=3000,
+    num_epochs=10, # 3000
 ):
     device = torch.device(device)
-    observations = torch.load(
+
+    loaded_observations = torch.load(
         observation_file,
         map_location="cpu",
         weights_only=False,
-    ).float()
-    observations = observations.reshape(-1, observations.shape[-1])
+    )
 
-    mean = observations.mean(dim=0)
-    centered = observations - mean
-    covariance = centered.T @ centered
-    covariance = covariance / (observations.shape[0] - 1)
-    covariance = 0.5 * (covariance + covariance.T)
-    covariance += 1e-5 * torch.eye(observations.shape[-1])
+    observations = get_observation_tensor(
+        loaded_observations
+    )
+
+    observations = observations.float()
+
+    observations = observations.reshape(
+        -1,
+        observations.shape[-1],
+    )
+
+    mean = torch.mean(
+        observations,
+        dim=0,
+    )
+
+    covariance = torch.cov(
+        observations.T
+    )
+
+    covariance = covariance + (
+        1e-5
+        * torch.eye(
+            observations.shape[-1],
+            dtype=observations.dtype,
+            device=observations.device,
+        )
+    )
 
     distribution = MultivariateNormal(
         mean.to(device),
