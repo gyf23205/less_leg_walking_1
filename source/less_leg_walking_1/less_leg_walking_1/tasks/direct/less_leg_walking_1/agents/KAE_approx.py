@@ -1,5 +1,6 @@
-import argparse
 from pathlib import Path
+import sys
+import types
 
 import torch
 import torch.nn as nn
@@ -8,10 +9,10 @@ from torch.distributions import MultivariateNormal
 from torch.utils.data import DataLoader, TensorDataset
 
 
-class EncoderWalk(nn.Module):
+class Encoder_walk(nn.Module):
     def __init__(self, state_dim, hidden_dim, observable_dim):
         super().__init__()
-        self.network = nn.Sequential(
+        self.encoder = nn.Sequential(
             nn.Linear(state_dim, hidden_dim * 4),
             nn.Tanh(),
             nn.Linear(hidden_dim * 4, hidden_dim * 3),
@@ -23,8 +24,8 @@ class EncoderWalk(nn.Module):
             nn.Linear(hidden_dim, observable_dim),
         )
 
-    def forward(self, inputs):
-        return self.network(inputs)
+    def forward(self, x):
+        return self.encoder(x)
 
 
 class Decoder(nn.Module):
@@ -32,120 +33,250 @@ class Decoder(nn.Module):
         super().__init__()
         self.linear = nn.Linear(observable_dim, state_dim, bias=False)
 
-    def forward(self, inputs):
-        return self.linear(inputs)
+    def forward(self, x):
+        return self.linear(x)
 
 
-class KoopmanAutoencoderWalk(nn.Module):
-    def __init__(self, state_dim, hidden_dim, observable_dim):
+class KoopmanAutoencoder_walk(nn.Module):
+    def __init__(self, state_dim, hidden_dim, observable_dim, device):
         super().__init__()
-        self.encoder = EncoderWalk(state_dim, hidden_dim, observable_dim)
-        self.decoder = Decoder(observable_dim, state_dim)
-        self.register_buffer("K", torch.randn(observable_dim, observable_dim))
-
-    def forward(self, inputs):
-        latent = self.encoder(inputs)
-        predicted_latent = latent @ self.K.T
-        return (
-            self.decoder(latent),
-            latent,
-            self.decoder(predicted_latent),
+        self.encoder = Encoder_walk(
+            state_dim,
+            hidden_dim,
+            observable_dim,
+        )
+        self.decoder = Decoder(
+            observable_dim,
+            state_dim,
+        )
+        self.state_dim = state_dim
+        self.hidden_dim = hidden_dim
+        self.observable_dim = observable_dim
+        self.K = torch.randn(
+            observable_dim,
+            observable_dim,
+            device=device,
         )
 
-    def update_koopman_operator(self, latent_inputs, latent_outputs):
-        latent_inputs = latent_inputs.reshape(-1, latent_inputs.shape[-1]).T
-        latent_outputs = latent_outputs.reshape(-1, latent_outputs.shape[-1]).T
-        operator = latent_outputs @ torch.linalg.pinv(
-            latent_inputs,
+    def forward(self, x):
+        z = self.encoder(x)
+        z_next = torch.matmul(z, self.K.T)
+        y_hat = self.decoder(z_next)
+        x_hat = self.decoder(z)
+        return x_hat, z, y_hat
+
+    def compute_koopman_operator(
+        self,
+        latent_X,
+        latent_Y,
+        device,
+    ):
+        del device
+        latent_X = latent_X.view(
+            -1,
+            latent_X.size(-1),
+        ).T
+        latent_Y = latent_Y.view(
+            -1,
+            latent_Y.size(-1),
+        ).T
+        self.K = latent_Y @ torch.linalg.pinv(
+            latent_X,
             rcond=1e-5,
         )
-        self.K.copy_(operator)
+
+
+def _install_legacy_autoencoder_module():
+    module = types.ModuleType("Autoencoder")
+    module.Encoder_walk = Encoder_walk
+    module.Decoder = Decoder
+    module.KoopmanAutoencoder_walk = KoopmanAutoencoder_walk
+    sys.modules["Autoencoder"] = module
+    sys.modules[
+        "less_leg_walking_1.tasks.direct.less_leg_walking_1.Autoencoder"
+    ] = module
 
 
 def load_kae(checkpoint_file, device):
-    import sys
-    import types
+    _install_legacy_autoencoder_module()
 
-    legacy_module = types.ModuleType(
-        "Autoencoder"
-    )
-
-    legacy_module.Encoder_walk = (
-        EncoderWalk
-    )
-
-    legacy_module.Decoder = Decoder
-
-    legacy_module.KoopmanAutoencoder_walk = (
-        KoopmanAutoencoderWalk
-    )
-
-    if "Autoencoder" not in sys.modules:
-        sys.modules["Autoencoder"] = (
-            legacy_module
-        )
-
-    checkpoint = torch.load(
+    kae = torch.load(
         checkpoint_file,
         map_location=device,
         weights_only=False,
     )
 
-    if isinstance(checkpoint, nn.Module):
-        return checkpoint.to(device)
-
-    if not isinstance(checkpoint, dict):
+    if not isinstance(kae, nn.Module):
         raise TypeError(
-            "Unsupported KAE checkpoint type: "
-            + str(type(checkpoint))
+            f"KAE file must contain a full torch.nn.Module: "
+            f"{checkpoint_file}"
         )
 
-    model = KoopmanAutoencoderWalk(
-        checkpoint["state_dim"],
-        checkpoint["hidden_dim"],
-        checkpoint["observable_dim"],
-    )
+    kae = kae.to(device)
+    kae.K = kae.K.to(device)
+    kae.eval()
+    return kae
 
-    model.load_state_dict(
-        checkpoint["state_dict"]
-    )
 
-    return model.to(device)
+def koopman_loss(
+    x,
+    x_hat,
+    latent_x,
+    y_seq_states,
+    y_seq_latents,
+    p,
+    action_dim,
+    model,
+):
+    mse_loss = nn.MSELoss()
 
-def get_observation_tensor(observations):
-    while not torch.is_tensor(observations):
-        if not hasattr(observations, "keys"):
-            raise TypeError(
-                "Observation history must contain a Tensor."
+    recon_loss = mse_loss(x_hat, x)
+    state_pred_loss = 0.0
+    latent_pred_loss = 0.0
+    action_loss = 0.0
+
+    Ks = [
+        torch.linalg.matrix_power(
+            model.K,
+            step,
+        )
+        for step in range(1, p + 1)
+    ]
+
+    for k in range(p):
+        pred_lat_k = latent_x @ Ks[k].T
+        pred_y_k = model.decoder(pred_lat_k)
+
+        state_pred_loss = (
+            state_pred_loss
+            + mse_loss(
+                pred_y_k,
+                y_seq_states[:, k, :],
+            )
+        )
+        latent_pred_loss = (
+            latent_pred_loss
+            + mse_loss(
+                pred_lat_k,
+                y_seq_latents[:, k, :],
+            )
+        )
+
+        if k == p - 1:
+            action_loss = (
+                action_loss
+                + mse_loss(
+                    pred_y_k[:, :action_dim],
+                    y_seq_states[
+                        :,
+                        k,
+                        :action_dim,
+                    ],
+                )
             )
 
-        keys = list(observations.keys())
+    state_pred_loss = state_pred_loss / p
+    latent_pred_loss = latent_pred_loss / p
 
-        if "policy" in keys:
-            observations = observations["policy"]
-            continue
+    return (
+        recon_loss,
+        state_pred_loss,
+        latent_pred_loss,
+        action_loss,
+    )
 
-        if "obs" in keys:
-            observations = observations["obs"]
-            continue
 
-        tensor_keys = []
+def compute_l_kae(
+    kae,
+    aug_input,
+    aug_output,
+    c1,
+    c2,
+    c3,
+    p,
+    device,
+    aug_input_all,
+    aug_output_all,
+    inner,
+    batch_size,
+    action_dim,
+):
+    del aug_output
+    del aug_input_all
 
-        for key in keys:
-            value = observations[key]
+    B = aug_input.size(0)
+    start = inner * batch_size
+    end = start + B
 
-            if torch.is_tensor(value):
-                tensor_keys.append(key)
+    x = aug_input.to(device).squeeze(1)
+    x_hat, latent_x, _ = kae(x)
 
-        if len(tensor_keys) != 1:
-            raise KeyError(
-                "Could not identify the policy observation Tensor. "
-                f"Available keys: {keys}"
-            )
+    y_seq_states = []
+    y_seq_latents = []
 
-        observations = observations[tensor_keys[0]]
+    for k in range(p):
+        if end + k > len(aug_output_all):
+            break
 
-    return observations
+        yk = (
+            aug_output_all[
+                start + k : end + k
+            ]
+            .to(device)
+            .squeeze(1)
+        )
+        _, latent_yk, _ = kae(yk)
+
+        y_seq_states.append(yk)
+        y_seq_latents.append(latent_yk)
+
+    if not y_seq_states:
+        raise RuntimeError(
+            "No future states available for multi-step supervision."
+        )
+
+    if len(y_seq_states) < p:
+        last_y = y_seq_states[-1]
+        last_ly = y_seq_latents[-1]
+
+        for _ in range(
+            p - len(y_seq_states)
+        ):
+            y_seq_states.append(last_y)
+            y_seq_latents.append(last_ly)
+
+    y_seq_states = torch.stack(
+        y_seq_states,
+        dim=1,
+    )
+    y_seq_latents = torch.stack(
+        y_seq_latents,
+        dim=1,
+    )
+
+    (
+        recon_loss,
+        state_pred_loss,
+        koopman_pred_loss,
+        loss_action,
+    ) = koopman_loss(
+        x,
+        x_hat,
+        latent_x,
+        y_seq_states,
+        y_seq_latents,
+        p,
+        action_dim,
+        kae,
+    )
+
+    loss_kae = (
+        c1 * recon_loss
+        + c2 * state_pred_loss
+        + c3 * koopman_pred_loss
+    )
+
+    return loss_kae, loss_action
 
 
 def train_and_save_kae(
@@ -157,237 +288,272 @@ def train_and_save_kae(
     observable_dim=16,
     padded_dimension=256,
     hidden_dim=256,
-    sample_count=100000,
+    sample_count=50000,
     batch_size=2048,
-    num_epochs=2000, #total epoch
-    epochs_schedule = [600, 1200],
-    epochs_schedule_lr = [1e-3, 1e-4, 1e-5]
+    num_epochs=3000,
+    learning_rate=1e-3,
+    kae_coefficient=0.1,
+    action_coefficient=0.9,
+    c1=1.0,
+    c2=1.0,
+    c3=1.0,
+    p=1,
 ):
     device = torch.device(device)
+    observation_file = Path(
+        observation_file
+    )
+    kae_directory = Path(
+        kae_directory
+    )
 
-    loaded_observations = torch.load(
+    if not observation_file.is_file():
+        raise FileNotFoundError(
+            str(observation_file)
+        )
+
+    kae_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    observations = torch.load(
         observation_file,
         map_location="cpu",
         weights_only=False,
-    )
-
-    observations = get_observation_tensor(
-        loaded_observations
-    )
-
-    observations = observations.float()
+    ).float()
 
     observations = observations.reshape(
         -1,
         observations.shape[-1],
     )
 
-    mean = torch.mean(
-        observations,
-        dim=0,
-    )
+    obs_dim = observations.shape[-1]
 
-    covariance = torch.cov(
-        observations.T
+    mu = observations.mean(dim=0)
+    centered = observations - mu
+    sigma = centered.T @ centered
+    sigma = sigma / (
+        observations.shape[0] - 1
     )
-
-    covariance = covariance + (
-        1e-5
-        * torch.eye(
-            observations.shape[-1],
-            dtype=observations.dtype,
-            device=observations.device,
-        )
+    sigma = 0.5 * (
+        sigma + sigma.T
+    )
+    sigma = sigma + 1e-5 * torch.eye(
+        obs_dim,
+        dtype=sigma.dtype,
     )
 
     distribution = MultivariateNormal(
-        mean.to(device),
-        covariance_matrix=covariance.to(device),
+        mu.to(device),
+        covariance_matrix=sigma.to(device),
     )
 
     policy = policy.to(device)
     policy.eval()
+
     with torch.no_grad():
-        sampled_observations = distribution.sample((sample_count,))
-        target_actions = policy(sampled_observations)
-        if isinstance(target_actions, tuple):
-            target_actions = target_actions[0]
+        random_input = distribution.sample(
+            (sample_count,)
+        )
+        policy_output = policy(
+            random_input
+        )
 
-    observation_dim = sampled_observations.shape[-1]
-    action_dim = target_actions.shape[-1]
-    padded_observations = F.pad(
-        sampled_observations,
-        (0, padded_dimension - observation_dim),
+        if isinstance(
+            policy_output,
+            tuple,
+        ):
+            policy_output = (
+                policy_output[0]
+            )
+
+    action_dim = (
+        policy_output.shape[-1]
+    )
+
+    aug_input = F.pad(
+        random_input,
+        (
+            0,
+            padded_dimension - obs_dim,
+        ),
         value=1.0,
     )
-    padded_actions = F.pad(
-        target_actions,
-        (0, padded_dimension - action_dim),
+
+    aug_output = F.pad(
+        policy_output,
+        (
+            0,
+            padded_dimension
+            - action_dim,
+        ),
         value=1.0,
     )
 
-    loader = DataLoader(
-        TensorDataset(padded_observations, padded_actions),
+    aug_input_all = (
+        aug_input.unsqueeze(1)
+    )
+    aug_output_all = (
+        aug_output.unsqueeze(1)
+    )
+
+    train_loader = DataLoader(
+        TensorDataset(
+            aug_input_all,
+            aug_output_all,
+        ),
         batch_size=batch_size,
         shuffle=False,
     )
-    model = KoopmanAutoencoderWalk(
-        padded_dimension,
-        hidden_dim,
-        observable_dim,
+
+    kae = KoopmanAutoencoder_walk(
+        state_dim=padded_dimension,
+        hidden_dim=hidden_dim,
+        observable_dim=observable_dim,
+        device=device,
     ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    mse = nn.MSELoss()
 
-    for epoch in range(num_epochs):
-        if epoch > epochs_schedule[1]:
-            learning_rate = epochs_schedule_lr[2]
-        elif epoch > epochs_schedule[0]:
-            learning_rate = epochs_schedule_lr[1]
+    optimizer = torch.optim.Adam(
+        kae.parameters(),
+        lr=learning_rate,
+    )
+
+    for epoch in range(
+        num_epochs
+    ):
+        if epoch > 2000:
+            current_lr = 1e-5
+        elif epoch > 1000:
+            current_lr = 1e-4
         else:
-            learning_rate = epochs_schedule_lr[0]
+            current_lr = (
+                learning_rate
+            )
 
-        for parameter_group in optimizer.param_groups:
-            parameter_group["lr"] = learning_rate
+        for group in (
+            optimizer.param_groups
+        ):
+            group["lr"] = current_lr
 
         running_loss = 0.0
-        running_reconstruction_loss = 0.0
-        running_prediction_loss = 0.0
-        running_latent_loss = 0.0
         running_action_loss = 0.0
 
-        for batch_observations, batch_actions in loader:
-            reconstructed, latent_observations, predicted_actions = model(
-                batch_observations
-            )
-            latent_actions = model.encoder(
-                batch_actions
-            )
-
-            predicted_latent = (
-                latent_observations @ model.K.T
-            )
-
-            reconstruction_loss = mse(
-                reconstructed,
-                batch_observations,
-            )
-
-            prediction_loss = mse(
-                predicted_actions,
-                batch_actions,
-            )
-
-            latent_loss = mse(
-                predicted_latent,
-                latent_actions,
+        for inner, (
+            batch_input,
+            batch_output,
+        ) in enumerate(
+            train_loader
+        ):
+            (
+                loss_kae,
+                loss_action,
+            ) = compute_l_kae(
+                kae,
+                batch_input,
+                batch_output,
+                c1,
+                c2,
+                c3,
+                p,
+                device,
+                aug_input_all,
+                aug_output_all,
+                inner,
+                batch_size,
+                action_dim,
             )
 
-            action_loss = mse(
-                predicted_actions[:, :action_dim],
-                batch_actions[:, :action_dim],
+            loss = (
+                kae_coefficient
+                * loss_kae
+                + action_coefficient
+                * loss_action
             )
-
-            kae_loss = (
-                reconstruction_loss
-                + prediction_loss
-                + latent_loss
-            )
-            loss = 0.1 * kae_loss + 0.9 * action_loss
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            torch.nn.utils.clip_grad_norm_(
+                kae.parameters(),
+                max_norm=1.0,
+            )
+
             optimizer.step()
 
-            running_loss += loss.detach().item()
-            running_reconstruction_loss += (
-                reconstruction_loss.detach().item()
-            )
-            running_prediction_loss += (
-                prediction_loss.detach().item()
-            )
-            running_latent_loss += (
-                latent_loss.detach().item()
+            running_loss += (
+                loss.item()
             )
             running_action_loss += (
-                action_loss.detach().item()
+                loss_action.item()
             )
 
             with torch.no_grad():
-                all_input_latent = model.encoder(padded_observations)
-                all_output_latent = model.encoder(padded_actions)
-                model.update_koopman_operator(
-                    all_input_latent,
-                    all_output_latent,
+                (
+                    _,
+                    latent_input_all,
+                    _,
+                ) = kae(
+                    aug_input_all.squeeze(
+                        1
+                    )
+                )
+                (
+                    _,
+                    latent_output_all,
+                    _,
+                ) = kae(
+                    aug_output_all.squeeze(
+                        1
+                    )
                 )
 
-        batch_count = len(loader)
+                kae.compute_koopman_operator(
+                    latent_input_all,
+                    latent_output_all,
+                    device,
+                )
 
-        average_loss = (
-            running_loss / batch_count
-        )
-
-        if epoch == 0 or (epoch + 1) % 100 == 0:
+        if (
+            epoch == 0
+            or (epoch + 1) % 100
+            == 0
+        ):
+            num_batches = len(
+                train_loader
+            )
             print(
                 "[KAE]",
                 task_name,
                 "epoch",
                 epoch + 1,
-                "total",
-                average_loss,
-                "    ||  reconstruction",
-                running_reconstruction_loss / batch_count,
-                "prediction",
-                running_prediction_loss / batch_count,
-                "latent",
-                running_latent_loss / batch_count,
-                "action",
-                running_action_loss / batch_count,
+                "loss",
+                running_loss
+                / num_batches,
+                "action_loss",
+                running_action_loss
+                / num_batches,
             )
 
-    kae_directory = Path(kae_directory)
-    kae_directory.mkdir(parents=True, exist_ok=True)
-    output_file = kae_directory / f"{task_name}_KAE.pth"
-    checkpoint = {
-        "state_dim": padded_dimension,
-        "hidden_dim": hidden_dim,
-        "observable_dim": observable_dim,
-        "state_dict": model.cpu().state_dict(),
-    }
-    torch.save(checkpoint, output_file)
+    kae.eval()
+    kae = kae.cpu()
+    kae.K = kae.K.detach().cpu()
+
+    _install_legacy_autoencoder_module()
+
+    output_file = (
+        kae_directory
+        / f"{task_name}_KAE.pth"
+    )
+
+    torch.save(
+        kae,
+        output_file,
+    )
+
+    print(
+        "[KAE] Saved:",
+        output_file,
+    )
+
     return output_file
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--policy", required=True)
-    parser.add_argument("--observations", required=True)
-    parser.add_argument("--kae-dir", required=True)
-    parser.add_argument("--device", default="cuda")
-    arguments = parser.parse_args()
-
-    policy_data = torch.load(
-        arguments.policy,
-        map_location=arguments.device,
-        weights_only=False,
-    )
-    if isinstance(policy_data, nn.Module):
-        policy = policy_data
-    elif policy_data.get("policy") is not None:
-        policy = policy_data["policy"]
-    else:
-        policy = policy_data["actor"]
-
-    train_and_save_kae(
-        arguments.task,
-        policy,
-        arguments.observations,
-        arguments.kae_dir,
-        arguments.device,
-    )
-
-
-if __name__ == "__main__":
-    main()

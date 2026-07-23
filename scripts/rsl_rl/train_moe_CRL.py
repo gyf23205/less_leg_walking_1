@@ -32,7 +32,7 @@ class ObservationLogger:
         self,
         env,
         log_dir,
-        max_samples=15000,
+        max_samples=30000,
     ):
         self.env = env
         self.original_step = env.step

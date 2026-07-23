@@ -489,9 +489,8 @@ class MoEActorCritic(ActorCritic):
         
         # 4. Blend the two pathways
         actions = (
-            gate * kae_actions
-            + (1.0 - gate) * mlp_actions
-        )
+        gate * kae_actions
+        + (1.0 - gate) * mlp_actions    )
 
         self.last_expert_weights = expert_weights.detach()
             
