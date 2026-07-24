@@ -332,7 +332,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             obs_e, _ = env_handle.reset()
             ep_rewards = torch.zeros(env_handle.num_envs, device=torch_device)
             completed = []
-            with torch.inference_mode():
+            # NOTE: use no_grad (not inference_mode) here. The env creates/clones persistent
+            # tensors during _get_observations/_get_rewards/_reset_idx; under inference_mode
+            # those become "inference tensors" that then break later in-place updates in the
+            # normal training loop. no_grad gives the same gradient-free eval without that side
+            # effect (and matches what agent.act() / the main loop already use).
+            with torch.no_grad():
                 for _ in range(num_steps):
                     dist    = actor(obs_e)
                     actions = dist.mean          # deterministic

@@ -57,6 +57,12 @@ class LessLegWalkingEnv(DirectRLEnv):
                 "sensitivity",
             ]
         }
+        # Create episode reward accumulators here (outside any inference-mode context)
+        # rather than lazily in _get_rewards: a task-switch detection eval runs the first
+        # _get_rewards() inside torch.inference_mode(), which would make lazily-created
+        # tensors "inference tensors" and break later in-place += in the training loop.
+        self._episode_core_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         # Updated feet detection for 3-legged robot (exclude RF foot)
@@ -90,8 +96,13 @@ class LessLegWalkingEnv(DirectRLEnv):
         self._actions[:, [2, 6, 10]] = 0.0
         self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
         self._previous_actions_KAE = self.full_action_for_KAE.clone()
-        self.full_action_for_KAE = actions.clone()
-        ####### 
+        # Clamp to [-1, 1] (magnitude bound only; RF-leg joints are NOT zeroed here,
+        # unlike self._actions). This value is fed back into the observation as
+        # `augmented_action`, so leaving it unbounded creates an action->obs->action
+        # positive-feedback loop that blows observations up to NaN when a foreign /
+        # large-output policy is applied (e.g. FAME's cross-task detection eval).
+        self.full_action_for_KAE = actions.clone().clamp(-1.0, 1.0)
+        #######
 
     def _apply_action(self):
         self._robot.set_joint_position_target(self._processed_actions)
@@ -242,11 +253,7 @@ class LessLegWalkingEnv(DirectRLEnv):
                             - (self.cfg.weight_sensitivty_scale*weight_stability * self.step_dt)
                 
         # Let's return the FULL reward for training, but track core separately
-        if not hasattr(self, '_episode_core_reward'):
-            self._episode_core_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        if not hasattr(self, '_episode_full_reward'):
-            self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        
+        # (_episode_core_reward / _episode_full_reward are initialised in __init__)
         self._episode_core_reward += reward_without_MoE_only
         self._episode_full_reward += reward
         self._last_reward_mean = reward.mean().item()
@@ -508,11 +515,6 @@ class AnymalCEnv(DirectRLEnv):
         # Logging
         extras = dict()
         for key in self._episode_sums.keys():
-            # Clone per-key episode sum tensor before doing indexed writes.
-            try:
-                self._episode_sums[key] = self._episode_sums[key].clone()
-            except Exception:
-                pass
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
             self._episode_sums[key][env_ids] = 0.0
