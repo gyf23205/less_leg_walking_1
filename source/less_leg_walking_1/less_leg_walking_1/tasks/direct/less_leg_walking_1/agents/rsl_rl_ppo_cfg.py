@@ -9,13 +9,13 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 # ############################################
 # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
+# from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
 # USE THIS FOR MoE
 from ..MoE import MoECfg, MoEActorCritic  # Import both
 
 # USE THIS FOR COMPONENT
-from ..baselines.CompoNet import CompoCfg  # Import both
+# from ..baselines.CompoNet import CompoCfg  # Import both
 
 # ############################################
 

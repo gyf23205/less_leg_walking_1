@@ -9,7 +9,7 @@ sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
 """Script to train RL agent with RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""
-
+ 
 import argparse
 import sys
 
@@ -111,7 +111,6 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
-
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     # agent_cfg.max_iterations = 3
@@ -185,6 +184,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+
+    if os.environ.get("CRL_ACTION_LOG") == "1":
+        from train_moe_CRL import ActionLogger
+        action_logger = ActionLogger(env, log_dir)
     
     # # DEBUG
     # print("Obs space:", env.observation_space)
@@ -285,6 +288,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     print(f"[INFO]: Complete model with metadata saved to: {complete_model_path}")
 
     # close the simulator
+    if os.environ.get("CRL_ACTION_LOG") == "1":
+        action_logger.save()
     env.close()
 
 
