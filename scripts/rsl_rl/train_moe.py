@@ -337,6 +337,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             module_spec
         )
 
+        sys.modules[module_spec.name] = kae_module
+
         module_spec.loader.exec_module(
             kae_module
         )
