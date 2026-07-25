@@ -85,6 +85,26 @@ class KoopmanAutoencoder_walk(nn.Module):
             rcond=1e-5,
         )
 
+# def run_policy(policy, observations):
+#     if hasattr(policy, "act_inference"):
+#         policy_output = policy.act_inference(
+#             observations
+#         )
+#     else:
+#         policy_output = policy(
+#             observations
+#         )
+
+#     if isinstance(policy_output, tuple):
+#         policy_output = policy_output[0]
+
+#     if not torch.is_tensor(policy_output):
+#         raise TypeError(
+#             "Policy output must be a Tensor."
+#         )
+
+#     return policy_output
+
 
 def _install_legacy_autoencoder_module():
     module = types.ModuleType("Autoencoder")
@@ -290,7 +310,7 @@ def train_and_save_kae(
     hidden_dim=256,
     sample_count=50000,
     batch_size=2048,
-    num_epochs=3000,
+    num_epochs=5,
     learning_rate=1e-3,
     kae_coefficient=0.1,
     action_coefficient=0.9,
@@ -353,24 +373,22 @@ def train_and_save_kae(
     policy.eval()
 
     with torch.no_grad():
-        random_input = distribution.sample(
-            (sample_count,)
-        )
-        policy_output = policy(
-            random_input
-        )
+        random_input = distribution.sample((sample_count,))
+        policy_output = policy(random_input)
 
-        if isinstance(
-            policy_output,
-            tuple,
-        ):
-            policy_output = (
-                policy_output[0]
-            )
+        if isinstance(policy_output, tuple):
+            policy_output = policy_output[0]
 
-    action_dim = (
-        policy_output.shape[-1]
-    )
+        if not torch.is_tensor(policy_output):
+            raise TypeError("Policy output must be a Tensor.")
+
+    action_dim = policy_output.shape[-1]
+
+    if action_dim > padded_dimension:
+        raise ValueError(
+            f"Action dimension {action_dim} exceeds padded dimension "
+            f"{padded_dimension}."
+        )
 
     aug_input = F.pad(
         random_input,
@@ -414,14 +432,18 @@ def train_and_save_kae(
         device=device,
     ).to(device)
 
-    optimizer = torch.optim.Adam(
-        kae.parameters(),
-        lr=learning_rate,
-    )
+    optimizer = torch.optim.Adam(kae.parameters(), lr=learning_rate)
 
-    for epoch in range(
-        num_epochs
-    ):
+    with torch.no_grad():
+        _, latent_input_all, _ = kae(aug_input_all.squeeze(1))
+        _, latent_output_all, _ = kae(aug_output_all.squeeze(1))
+        kae.compute_koopman_operator(
+            latent_input_all,
+            latent_output_all,
+            device,
+        )
+
+    for epoch in range(num_epochs):
         if epoch > 2000:
             current_lr = 1e-5
         elif epoch > 1000:

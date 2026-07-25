@@ -230,10 +230,14 @@ class MoEActorCritic(ActorCritic):
                 )
             )
 
-            module_spec.loader.exec_module(
+            sys.modules[module_spec.name] = (
                 kae_module
             )
 
+            module_spec.loader.exec_module(
+                kae_module
+            )
+            
             self.kaes = nn.ModuleList()
 
             for kae_file in self.crl_kae_paths:
