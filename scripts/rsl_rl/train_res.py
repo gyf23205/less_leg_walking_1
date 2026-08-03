@@ -273,6 +273,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         model = None
 
 
+    # Compose the frozen base with the (unbounded) trained residual so the saved policy
+    # reproduces the trained behaviour exactly and can be chained as the next task's
+    # frozen base (see train_res_CRL.py). Must match the forward() in res_net.py:
+    # residual is linear, not tanh-bounded.
     saved_actor = ComposedActor(model.original_policy, model.actor) if hasattr(model, "original_policy") else model.actor
     complete_model_data = {
         'actor': saved_actor,

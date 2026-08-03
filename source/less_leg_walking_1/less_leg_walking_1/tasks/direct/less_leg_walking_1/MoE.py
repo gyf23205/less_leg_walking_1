@@ -81,6 +81,10 @@ class MoEActorCritic(ActorCritic):
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
         # activation = kwargs.pop("activation", "elu")
         self.act_dim = num_actions
+        # Gate logging: running stats accumulated over each rollout, popped per log iteration
+        self.last_gate = None
+        self._gate_running_sum = 0.0
+        self._gate_running_count = 0
         self.kae_path = kwargs.pop('kae_path')
         self.device = kwargs.pop('device')
         # self.n_experts = kwargs.pop('n_experts', 1)
@@ -490,7 +494,13 @@ class MoEActorCritic(ActorCritic):
         gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
         gate_logit = self.gating_network(gating_input)
         gate = torch.sigmoid(gate_logit)
-        
+
+        # Track the gate for logging (mean over the batch, averaged across calls per iteration)
+        gate_detached = gate.detach()
+        self.last_gate = gate_detached
+        self._gate_running_sum += gate_detached.mean().item()
+        self._gate_running_count += 1
+
         # 4. Blend the two pathways
         actions = (
         gate * kae_actions
@@ -529,6 +539,19 @@ class MoEActorCritic(ActorCritic):
         obs = self.get_actor_obs(obs)
         obs = self.actor_obs_normalizer(obs)
         return self.forward(obs)
+
+    def pop_gate_stats(self):
+        """Return the mean gate value accumulated since the last call, then reset.
+
+        The gate is a scalar in [0, 1] blending the KAE pathway (gate) with the
+        MLP residual (1 - gate); returns None if no forward pass has run yet.
+        """
+        if self._gate_running_count == 0:
+            return None
+        mean_gate = self._gate_running_sum / self._gate_running_count
+        self._gate_running_sum = 0.0
+        self._gate_running_count = 0
+        return mean_gate
 
     def _check_gradients_enabled(self):
         """Utility to check if gradients are enabled for model parameters."""

@@ -244,6 +244,11 @@ class LessLegWalkingEnv(DirectRLEnv):
             "sensitivity": self.cfg.weight_sensitivty_scale*weight_stability * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        # Divergence safety net: keep the per-step training reward finite so a physically
+        # unstable step (e.g. a residual policy destabilising the robot on rough terrain)
+        # cannot explode to +/-1e22 -> NaN and destroy the whole run. Healthy per-step
+        # rewards are O(1-10), so this bound never triggers in normal training.
+        reward = torch.nan_to_num(reward, nan=0.0, posinf=1.0e4, neginf=-1.0e4).clamp(-1.0e4, 1.0e4)
 
         # Logging
         for key, value in rewards.items():
@@ -466,6 +471,11 @@ class AnymalCEnv(DirectRLEnv):
             "flat_orientation_l2": flat_orientation * self.cfg.flat_orientation_reward_scale * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        # Divergence safety net: keep the per-step training reward finite so a physically
+        # unstable step (e.g. a residual policy destabilising the robot on rough terrain)
+        # cannot explode to +/-1e22 -> NaN and destroy the whole run. Healthy per-step
+        # rewards are O(1-10), so this bound never triggers in normal training.
+        reward = torch.nan_to_num(reward, nan=0.0, posinf=1.0e4, neginf=-1.0e4).clamp(-1.0e4, 1.0e4)
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
@@ -807,6 +817,11 @@ class AnymalJumpEnv(DirectRLEnv):
             "action_rate": action_rate_penalty * self.cfg.action_rate_penalty_scale * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        # Divergence safety net: keep the per-step training reward finite so a physically
+        # unstable step (e.g. a residual policy destabilising the robot on rough terrain)
+        # cannot explode to +/-1e22 -> NaN and destroy the whole run. Healthy per-step
+        # rewards are O(1-10), so this bound never triggers in normal training.
+        reward = torch.nan_to_num(reward, nan=0.0, posinf=1.0e4, neginf=-1.0e4).clamp(-1.0e4, 1.0e4)
 
         # Per-episode jump metrics.
         self._episode_peak_lift = torch.maximum(self._episode_peak_lift, lift)

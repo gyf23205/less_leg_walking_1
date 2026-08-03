@@ -59,8 +59,12 @@ parser.add_argument(
 parser.add_argument(
     "--switch_steps",
     type=int,
-    default=100_000,
-    help="Number of environment timesteps (rows) to run per task segment.",
+    default=60_000,
+    help=(
+        "Number of environment timesteps (rows) to run per task segment. Default 60000 = "
+        "2500 rollouts x 24 rollout_steps, matching the rsl_rl methods' 2500 iterations so both "
+        "reach the same unified x-axis budget of 2500 x (8 epochs x 8 minibatches) = 160k updates."
+    ),
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Override number of parallel envs.")
 parser.add_argument("--seed", type=int, default=None, help="Global random seed.")
@@ -237,6 +241,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     fame_cfg["experiment"]["directory"] = log_dir
 
     # ------------------------------------------------------------------
+    # Unified TensorBoard x-axis: rescale every add_scalar global_step from
+    # env-step rows (task_step) to cumulative minibatch optimizer updates, so
+    # FAME's x-axis matches the rsl_rl methods (which count it * epochs * minibatches).
+    #   x = task_step * (ppo_epochs * num_mini_batches) / rollout_steps
+    # With the pinned config (8 * 8 / 24) this reaches 160k updates at task_step=60000,
+    # identical to the rsl_rl runs. Only the fast-actor PPO minibatch updates are counted;
+    # FAME's auxiliary meta/distillation optimizer steps have no rsl_rl analog and are excluded.
+    _ppo_epochs = int(fame_cfg.get("ppo_epochs", 8))
+    _num_mini_batches = int(fame_cfg.get("num_mini_batches", 8))
+    _rollout_steps_cfg = int(fame_cfg.get("rollout_steps", 24))
+    _xaxis_multiplier = (_ppo_epochs * _num_mini_batches) / _rollout_steps_cfg
+    _scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    from common.tb_xaxis import patch_writer_gradient_steps
+
+    patch_writer_gradient_steps(_xaxis_multiplier)
+
+    # ------------------------------------------------------------------
+    # Keep a SINGLE TensorBoard event file: disable skrl's own writer so
+    # Agent.init() does not open a second one under a <timestamp>_FAMEAgent
+    # subfolder, then reuse this script's `writer` for the agent's track_data.
+    _agent_write_interval = fame_cfg["experiment"].get("write_interval", 1008)
+    if _agent_write_interval in ("auto", None):
+        _agent_write_interval = 1008
+    _agent_write_interval = int(_agent_write_interval)
+    fame_cfg["experiment"] = dict(fame_cfg["experiment"])  # avoid mutating the shared default dict
+    fame_cfg["experiment"]["write_interval"] = 0
+
+    # ------------------------------------------------------------------
     # Build memories
     # ------------------------------------------------------------------
     # PPO rollout buffer: fixed size = rollout_steps rows × actual num_envs.
@@ -264,6 +298,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         cfg=fame_cfg,
     )
     agent.init()
+
+    # Route the agent's track_data metrics into this script's single writer
+    # (skrl created no writer of its own because write_interval was set to 0 above).
+    agent.writer = writer
+    agent.write_interval = _agent_write_interval
 
     if args_cli.checkpoint:
         resume_path = retrieve_file_path(args_cli.checkpoint)
@@ -487,6 +526,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             try:
                 writer.add_scalar("Perf/rows_per_sec", steps_per_sec, task_step)
                 writer.add_scalar("Perf/samples_per_sec", samples_per_sec, task_step)
+                writer.add_scalar("Perf/total_fps", samples_per_sec, task_step)  # rsl_rl-compatible name
                 writer.add_scalar("Perf/walltime_min", total_elapsed_min, task_step)
                 writer.add_scalar("Perf/walltime_hours", total_elapsed_h, task_step)
             except Exception:
@@ -498,17 +538,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         if task_step % write_interval == 0 and completed_episode_rewards:
             mean_rew = sum(completed_episode_rewards) / len(completed_episode_rewards)
             mean_len = sum(completed_episode_lengths) / len(completed_episode_lengths)
-            writer.add_scalar("Train/mean_episode_reward", mean_rew, task_step)
+            # rsl_rl-compatible tag names (OnPolicyRunner.log) so curves overlay
+            writer.add_scalar("Train/mean_reward", mean_rew, task_step)
             writer.add_scalar("Train/mean_episode_length", mean_len, task_step)
             writer.add_scalar("Train/task_index", task_idx, task_step)
             completed_episode_rewards.clear()
             completed_episode_lengths.clear()
 
-        # Log env info (from infos["log"] if available)
+        # Log env info (from infos["log"] if available). Mirror rsl_rl's key scheme:
+        # keys already containing "/" (e.g. "Episode_Reward/track_lin_vel_xy_exp") are
+        # logged verbatim; bare keys go under "Episode/".
         if "log" in infos:
             for k, v in infos["log"].items():
                 if isinstance(v, torch.Tensor) and v.numel() == 1:
-                    writer.add_scalar(f"Info/{k}", v.item(), task_step)
+                    tag = k if "/" in k else f"Episode/{k}"
+                    writer.add_scalar(tag, v.item(), task_step)
 
         # ---- Checkpoint -------------------------------------------------
         ckpt_interval = agent_cfg.get("agent", {}).get("experiment", {}).get("checkpoint_interval", 20_000)

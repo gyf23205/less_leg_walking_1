@@ -36,6 +36,14 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--original_policy_path",
+    type=str,
+    default=None,
+    help="Path to the frozen base policy the checkpoint was trained on top of. "
+    "Must match the base used at train time (see the run's params/agent.yaml), "
+    "otherwise the saved 'original_policy' structure will not match.",
+)
 # parser = parser.add_argument("checkpoint", type=str, default="/home/yifan/git/less_leg_walking_1/logs/rsl_rl/less_leg_walking_rough/2025-12-21_22-32-25/model_1999.pt")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -98,6 +106,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # override configurations with non-hydra CLI arguments
     agent_cfg: RslRlBaseRunnerCfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    # The saved 'original_policy' inside the checkpoint mirrors whatever base policy the
+    # run was trained on (a plain Sequential, or a ComposedActor in the CRL setting).
+    # Point the config at the same base so ResActorCritic rebuilds a matching structure.
+    if args_cli.original_policy_path is not None:
+        agent_cfg.policy.original_policy_path = args_cli.original_policy_path
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
     # set the environment seed

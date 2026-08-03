@@ -78,6 +78,15 @@ class ResActorCritic(ActorCritic):
             **kwargs,
         )
 
+        # Zero-initialize the residual output layer so the composed policy STARTS at the
+        # base policy (action = base + residual = base at init), then learns a small
+        # correction. This is what yields positive transfer across tasks; without it a
+        # random residual corrupts the (good) base at the start of every task. Matches the
+        # reference RPL implementation (k-r-allen/residual-policy-learning: nn_last_zero).
+        _last_residual_linear = [m for m in self.actor.modules() if isinstance(m, nn.Linear)][-1]
+        nn.init.zeros_(_last_residual_linear.weight)
+        nn.init.zeros_(_last_residual_linear.bias)
+
         # Ensure gradients are enabled for actor and critic
         for param in self.actor.parameters():
             param.requires_grad = True
@@ -97,15 +106,23 @@ class ResActorCritic(ActorCritic):
 
 
     def forward(self, obs):
-        with torch.no_grad():  
+        with torch.no_grad():
             outputs_init = self.original_policy(obs) # Get hint action from original policy
-        res= self.actor(obs) # Get residual from ResPolicy
+        # Unbounded (linear) residual: smooth, non-vanishing gradients everywhere.
+        # A tanh*scale bound was tried to fight numerical blow-ups but saturates on
+        # unnormalized obs, pinning dims near +/-scale with ~zero gradient and causing
+        # the reward to rise then collapse; magnitude is instead bounded downstream by
+        # the env action clamp ([-1, 1]) and PPO max_grad_norm.
+        res = self.actor(obs)  # Get residual from ResPolicy
         # # Pad to 12-dim and keep gradients
         # padded_res = torch.zeros((res.shape[0], 12), device=res.device, dtype=res.dtype)
         # padded_res[:, [0, 3, 6, 1, 4, 7, 2, 5, 8]] = res  # Map 9-dim to 12-dim
         # res = padded_res
 
         actions = outputs_init + res
+        # NaN/Inf safety net: never let a non-finite base/residual propagate into the
+        # Gaussian mean (which would produce NaN log-probs and kill the PPO update).
+        actions = torch.nan_to_num(actions, nan=0.0, posinf=10.0, neginf=-10.0)
         # print(f"outputs shape:{outputs.shape}")
         # mu = outputs[..., : self.act_dim]
         # print(f"mu shape:{mu.shape}")
@@ -138,6 +155,8 @@ class ResActorCritic(ActorCritic):
             std = torch.exp(self.log_std).expand_as(mu)
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
+        # Keep std finite and strictly positive so the Normal never degenerates to NaN.
+        std = torch.nan_to_num(std, nan=1.0e-2, posinf=5.0, neginf=1.0e-6).clamp_min(1.0e-6)
         self.distribution = torch.distributions.Normal(mu,std)
 
     def evaluate(self, obs, actions=None, masks=None, hidden_states=None):

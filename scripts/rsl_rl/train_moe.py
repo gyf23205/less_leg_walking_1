@@ -118,11 +118,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
 
-    if os.environ.get("CRL_MODE") == "1":
-        agent_cfg.experiment_name = os.environ[
-            "CRL_TASK_NAME"
-        ]
-
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -147,8 +142,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
-    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # specify directory for logging runs: put each task's KAE-MoE run under its task folder
+    log_dir = "KAE_MoE"
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:
@@ -219,6 +214,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
     cli_args.patch_tensorboard_gradient_steps(runner)
+
+    # log the MoE gate value (KAE vs MLP blend) to TensorBoard each iteration
+    _orig_log = runner.log
+
+    def _log_with_gate(locs, *log_args, **log_kwargs):
+        _orig_log(locs, *log_args, **log_kwargs)
+        policy = runner.alg.policy
+        if runner.writer is not None and hasattr(policy, "pop_gate_stats"):
+            mean_gate = policy.pop_gate_stats()
+            if mean_gate is not None:
+                runner.writer.add_scalar("Policy/mean_gate", mean_gate, locs["it"])
+
+    runner.log = _log_with_gate
 
     print("policy class_name:", agent_cfg.policy.class_name)
     print("runner class_name:", agent_cfg.class_name)

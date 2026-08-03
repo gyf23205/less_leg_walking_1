@@ -62,10 +62,21 @@ class CompoActorCritic(ActorCritic):
                 input_dim_internal = obs_dim
             actor_layers = []
             for h in internal_hidden_dims:
-                actor_layers.append(nn.Linear(input_dim_internal, h))
+                lin = nn.Linear(input_dim_internal, h)
+                nn.init.orthogonal_(lin.weight, np.sqrt(2))
+                nn.init.zeros_(lin.bias)
+                actor_layers.append(lin)
                 actor_layers.append(nn.ELU())
                 input_dim_internal = h
-            actor_layers.append(nn.Linear(input_dim_internal, num_actions, bias=True))
+            # Near-zero final layer so the internal policy logits ~= 0 at init and the
+            # module output out = out_head + logits ~= out_head, i.e. the attention head
+            # over the previous (frozen) policies. This makes CompoNet START by reproducing
+            # the prior policy, which is what gives positive transfer. Matches the reference
+            # implementation (mikelma/componet: layer_init(..., std=0.01) on the policy head).
+            final = nn.Linear(input_dim_internal, num_actions, bias=True)
+            nn.init.orthogonal_(final.weight, 0.01)
+            nn.init.zeros_(final.bias)
+            actor_layers.append(final)
             return nn.Sequential(*actor_layers)
 
         if len(prevs_dir) > 0:

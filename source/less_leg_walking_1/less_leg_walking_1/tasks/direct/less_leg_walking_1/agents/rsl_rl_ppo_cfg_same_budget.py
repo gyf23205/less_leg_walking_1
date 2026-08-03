@@ -9,13 +9,13 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 # ############################################
 # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-# from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
+from ..res_net import ResCfg, ResActorCritic  # Import ResActorCritic
 
 # USE THIS FOR MoE
 from ..MoE import MoECfg, MoEActorCritic  # Import both
 
 # USE THIS FOR COMPONENT
-# from ..baselines.CompoNet import CompoCfg  # Import both
+from ..baselines.CompoNet import CompoCfg  # Import both
 
 # ############################################
 
@@ -57,8 +57,8 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.02,  # Increased entropy for more exploration
-        num_learning_epochs=8,  # More learning epochs
-        num_mini_batches=4,
+        num_learning_epochs=8,  # pinned: 8 epochs x 8 minibatches x 2500 iters = 160k minibatch updates
+        num_mini_batches=8,
         learning_rate=3.0e-4,
         schedule="adaptive",
         gamma=0.99,
@@ -79,14 +79,14 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.007, # 0.005 
-        num_mini_batches=5,
-        num_learning_epochs=10, # 5
+        num_mini_batches=8,  # pinned to 160k budget (was 5)
+        num_learning_epochs=8, # pinned to 160k budget (was 10)
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
         desired_kl=0.01,
-        max_grad_norm=2.0, # 1.0
+        max_grad_norm=1.0, # lowered from 2.0 to curb early divergence on rough terrain
     )
 
 @configclass
@@ -126,8 +126,8 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.02,  # Increased entropy for more exploration
-        num_learning_epochs=8,  # More learning epochs
-        num_mini_batches=4,
+        num_learning_epochs=8,  # pinned: 8 epochs x 8 minibatches x 2500 iters = 160k minibatch updates
+        num_mini_batches=8,
         learning_rate=3.0e-4,
         schedule="adaptive",
         gamma=0.99,
@@ -147,21 +147,21 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.007, # 0.005 
-        num_mini_batches=5,
-        num_learning_epochs=10, # 5
+        num_mini_batches=8,  # pinned to 160k budget (was 5)
+        num_learning_epochs=8, # pinned to 160k budget (was 10)
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
         desired_kl=0.01,
-        max_grad_norm=2.0, # 1.0
+        max_grad_norm=1.0, # lowered from 2.0 to curb early divergence on rough terrain
     )
 
 @configclass
 class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = "anymal_c_jump_flat"
     num_steps_per_env = 24
-    max_iterations =4000  # Increased for more training
+    max_iterations = 2500  # Increased for more training
     save_interval = 200
     empirical_normalization = False
 
@@ -189,7 +189,7 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.008,
-        num_mini_batches=4,
+        num_mini_batches=8,  # pinned to 160k budget (was 4)
         num_learning_epochs=8,
         learning_rate=2.0e-4,
         schedule="adaptive",
@@ -210,7 +210,7 @@ class AnymalJumpRoughPPORunnerCfg(AnymalJumpFlatPPORunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.008, # 0.005
-        num_mini_batches=4,
+        num_mini_batches=8,  # pinned to 160k budget (was 4)
         num_learning_epochs=8, # 5
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
@@ -219,3 +219,4 @@ class AnymalJumpRoughPPORunnerCfg(AnymalJumpFlatPPORunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0, # 1.0
     )
+

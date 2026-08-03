@@ -96,7 +96,14 @@ def patch_tensorboard_gradient_steps(runner) -> None:
     cumulative number of optimizer.step() calls, so runs with different num_learning_epochs /
     num_mini_batches / gradient_length remain directly comparable at equal x-axis values.
     """
-    from torch.utils.tensorboard import SummaryWriter
+    import os
+    import sys
+
+    # scripts/common lives one level up from scripts/rsl_rl
+    _scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    from common.tb_xaxis import patch_writer_gradient_steps
 
     alg = runner.alg
     if hasattr(alg, "num_mini_batches"):  # PPO
@@ -109,11 +116,4 @@ def patch_tensorboard_gradient_steps(runner) -> None:
     if updates_per_iter <= 0:
         raise ValueError(f"Computed non-positive updates_per_iter={updates_per_iter}")
 
-    original_add_scalar = SummaryWriter.add_scalar
-
-    def add_scalar(self, tag, scalar_value, global_step=None, *args, **kwargs):
-        if global_step is not None and not str(tag).endswith("/time"):
-            global_step = int(global_step * updates_per_iter)
-        return original_add_scalar(self, tag, scalar_value, global_step, *args, **kwargs)
-
-    SummaryWriter.add_scalar = add_scalar
+    patch_writer_gradient_steps(updates_per_iter)

@@ -69,16 +69,9 @@ FAME_DEFAULT_CONFIG = {
     "grad_norm_clip": 0.5,
 
     # --- PPO update schedule ---
-    # rollout_steps: number of env-step rows collected before each PPO update.
-    # With 4096 parallel envs: rollout_steps=24 → 24*4096 ≈ 98k transitions
-    # (matches the IsaacLab PPO baseline of 24 rollout steps × 4096 envs).
     "rollout_steps": 24,
-    # Increase optimisation per-sample: more epochs + smaller minibatches
-    # => better sample-efficiency (more SGD steps per collected row)
     "ppo_epochs":    8,     # optimisation epochs over each rollout
-    "mini_batch_size": 2048,  # mini-batch size within each epoch
-    # Number of minibatches to split the total collected samples into
-    # if `mini_batch_size` would otherwise be larger than `total_samples`.
+    "mini_batch_size": 2048,  # effectively "use num_mini_batches chunks"
     "num_mini_batches": 4,
 
     # --- rewards ---
@@ -569,9 +562,17 @@ class FAMEAgent(Agent):
 
         self._update_count += 1
         if n_updates > 0:
-            self.track_data("Fast/pg_loss",    total_pg_loss / n_updates)
-            self.track_data("Fast/value_loss", total_vf_loss / n_updates)
-            self.track_data("Fast/entropy",    total_ent     / n_updates)
+            # rsl_rl-compatible tag names so FAME curves overlay the rsl_rl methods
+            # (see rsl_rl OnPolicyRunner.log: Loss/surrogate, Loss/value_function,
+            #  Loss/entropy, Loss/learning_rate, Policy/mean_noise_std).
+            self.track_data("Loss/surrogate",      total_pg_loss / n_updates)
+            self.track_data("Loss/value_function", total_vf_loss / n_updates)
+            self.track_data("Loss/entropy",        total_ent     / n_updates)
+            self.track_data("Loss/learning_rate",  self.fast_actor_opt.param_groups[0]["lr"])
+            with torch.no_grad():
+                _, _fast_std = self.fast_actor.get_dist_params(s_flat)
+            self.track_data("Policy/mean_noise_std", _fast_std.mean().item())
+            # FAME-specific extras (no rsl_rl analog)
             self.track_data("Fast/returns_mean", ret_flat.mean().item())
             self.track_data("Fast/advantages_mean", adv_flat.mean().item())
 

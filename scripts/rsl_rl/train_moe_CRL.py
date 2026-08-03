@@ -6,19 +6,16 @@ from pathlib import Path
 
 import torch
 
-ORIGINAL_TASK = "Less-AnymalC-Rough-Walking-Direct-v1" # Assume the original task's 'KAE' is given
+ORIGINAL_TASK = "Less-AnymalC-Flat-Walking-Direct-v1" # Assume the original task's 'KAE' is given
 TRAIN_TASKS = [ # train in this order
-     "Less-Leg-Flat-Walking-Direct-v1",
-    # "Less-Leg-Rough-Walking-Direct-v1",
-     "Less-AnymalC-Jump-Direct-v1",
-    # "Less-AnymalC-Jump-Rough-Direct-v1",
+    "Less-AnymalC-Jump-Direct-v1",
+    "Less-AnymalC-Rough-Walking-Direct-v1",
+    "Less-Leg-Flat-Walking-Direct-v1",
+    "Less-AnymalC-Jump-Rough-Direct-v1",
+    "Less-Leg-Rough-Walking-Direct-v1",
 ]
 
-TASK_DIRECTORY = Path(
-    "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/"
-    "source/less_leg_walking_1/less_leg_walking_1/tasks/direct/"
-    "less_leg_walking_1"
-)
+TASK_DIRECTORY = Path("source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1")
 
 KAE_DIRECTORY = TASK_DIRECTORY / "KAEs"
 KAE_APPROX_FILE = (
