@@ -14,8 +14,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    gating_hidden_dims: list[int] = [64,32]#[64, 32] # gating network
-    weight_hidden_dims: list[int] = [64, 32] # wieght network
+    gating_hidden_dims: list[int] = [128, 64, 32]#[64, 32] # gating network
+    weight_hidden_dims: list[int] = [32] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"

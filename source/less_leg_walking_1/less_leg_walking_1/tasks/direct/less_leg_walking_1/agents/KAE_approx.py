@@ -298,8 +298,8 @@ def train_and_save_kae(
     hidden_dim=256,
     sample_count=10000,
     batch_size=2048,
-    num_epochs=500,
-    learning_rate=1e-3,
+    num_epochs=3000,
+    learning_rate=1e-4,
     kae_coefficient=0.1,
     action_coefficient=0.9,
     c1=1.0,
@@ -359,6 +359,9 @@ def train_and_save_kae(
     ).to(device)
     optimizer = torch.optim.Adam(kae.parameters(), lr=learning_rate)
     kae.train()
+
+    import time
+    start = time.perf_counter()
 
     for epoch in range(num_epochs):
         running_loss = 0.0
@@ -433,4 +436,8 @@ def train_and_save_kae(
     output_file = kae_directory / f"{task_name}_KAE.pth"
     torch.save(kae, output_file)
     print(f"[KAE] Saved: {output_file}")
+
+    elapsed = time.perf_counter() - start
+    print(f"Elapsed time for training KAE: {elapsed:.4f} seconds")
+
     return output_file
