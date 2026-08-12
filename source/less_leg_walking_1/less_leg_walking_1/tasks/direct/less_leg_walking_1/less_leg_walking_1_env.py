@@ -187,44 +187,52 @@ class LessLegWalkingEnv(DirectRLEnv):
         forward_velocity = self._robot.data.root_lin_vel_b[:, 0]  # x-velocity in body frame
         forward_progress = torch.clamp(forward_velocity, 0.0, 2.0)  # Reward positive forward motion
 
-        # Give more rewawrd for using KAE ####################################
-        # Give more reward for using KAE (observation-based skills)
-        # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)       
-
-        # weight sensitivty
         # try:
         #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
         # except: 
         #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
 
         action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+        weight_stability = torch.zeros(self.num_envs, device=self.device)
+        # # Give more rewawrd for using KAE ####################################
+        # # Give more reward for using KAE (observation-based skills)
+        # # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)       
 
-        try:
-            current_weights = self._policy_ref.last_expert_weights # [16 experts]
-            weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
-            self._prev_expert_weights = current_weights.clone()
-        except:
-            weight_stability = torch.zeros(self.num_envs, device=self.device)
-            try:
-                current_weights = self._policy_ref.last_expert_weights
-                self._prev_expert_weights = current_weights.clone()
-            except:    
-                pass
-
+        # # weight sensitivty
         # try:
-        #     current_weights = self._policy_ref.last_expert_weights # [16 experts]
         #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
-
-        #     # Penalize the variance/jitter of the expert selection.
-        #     # For a phantom leg, the weights often fluctuate wildly as the network 
-        #     # 'searches' for feedback. This dampens that search.
-        #     weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
-
-        #     # Update buffer
-        #     self._prev_expert_weights = current_weights.clone()
-        # except:
-        #     weight_stability = torch.zeros(self.num_envs, device=self.device)
+        # except: 
         #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+
+        # # action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+
+        # weight_stability = torch.zeros(self.num_envs, device=self.device)
+        # # try:
+        # #     current_weights = self._policy_ref.last_expert_weights # [16 experts]
+        # #     weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+        # #     self._prev_expert_weights = current_weights.clone()
+        # # except:
+        # #     weight_stability = torch.zeros(self.num_envs, device=self.device)
+        # #     try:
+        # #         current_weights = self._policy_ref.last_expert_weights
+        # #         self._prev_expert_weights = current_weights.clone()
+        # #     except:    
+        # #         pass
+
+        # # try:
+        # #     current_weights = self._policy_ref.last_expert_weights # [16 experts]
+        # #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+
+        # #     # Penalize the variance/jitter of the expert selection.
+        # #     # For a phantom leg, the weights often fluctuate wildly as the network 
+        # #     # 'searches' for feedback. This dampens that search.
+        # #     weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+
+        # #     # Update buffer
+        # #     self._prev_expert_weights = current_weights.clone()
+        # # except:
+        # #     weight_stability = torch.zeros(self.num_envs, device=self.device)
+        # #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
 
 
         rewards = {

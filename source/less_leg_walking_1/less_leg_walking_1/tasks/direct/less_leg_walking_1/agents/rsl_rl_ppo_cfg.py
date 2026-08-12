@@ -45,7 +45,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
     ############################################
     # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-    if mode == "scratch" or mode == "residual":
+    if mode == "residual":
         policy = ResCfg()
 
     # USE THIS FOR MoE
@@ -57,12 +57,13 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         policy = CompoCfg()
 
     # # Train from scratch nominal policy
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
-        activation="elu",
-    )
+    if mode == "scratch":
+        policy = RslRlPpoActorCriticCfg(
+            init_noise_std=1.0,
+            actor_hidden_dims=[512, 256, 128],
+            critic_hidden_dims=[512, 256, 128],
+            activation="elu",
+        )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -71,7 +72,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         clip_param=0.2,
         entropy_coef=0.02,  # Increased entropy for more exploration
         num_learning_epochs=8,  # More learning epochs
-        num_mini_batches=4,
+        num_mini_batches=8, #4
         learning_rate=3.0e-4,
         schedule="adaptive",
         gamma=0.99,
@@ -83,7 +84,13 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
-    experiment_name = "less_leg_walking_rough"
+    # experiment_name = "less_leg_walking_rough"
+    experiment_name = {
+            "scratch": "less_leg_walking_rough",
+            "MoE": "MoE16_less_leg_walking_rough",
+            "residual": "Residual_less_leg_walking_rough",
+            "component": "Component_less_leg_walking_rough"
+        }[mode]
     max_iterations = 2500
     
     # Slightly different hyperparameters for rough terrain
@@ -92,8 +99,8 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.007, # 0.005 
-        num_mini_batches=5,
-        num_learning_epochs=10, # 5
+        num_mini_batches=8, #5
+        num_learning_epochs=8, # 5
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
         gamma=0.99,
@@ -123,7 +130,7 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
     ############################################
     # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-    if mode == "scratch" or mode == "residual": 
+    if mode == "residual":
         policy = ResCfg()
 
     # USE THIS FOR MoE
@@ -134,13 +141,14 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     if mode == "component":
         policy = CompoCfg()
 
-    # Train from scratch nominal policy
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
-        activation="elu",
-    )
+    # # Train from scratch nominal policy
+    if mode == "scratch":
+        policy = RslRlPpoActorCriticCfg(
+            init_noise_std=1.0,
+            actor_hidden_dims=[512, 256, 128],
+            critic_hidden_dims=[512, 256, 128],
+            activation="elu",
+        )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -149,7 +157,7 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         clip_param=0.2,
         entropy_coef=0.02,  # Increased entropy for more exploration
         num_learning_epochs=8,  # More learning epochs
-        num_mini_batches=4,
+        num_mini_batches=8, #4
         learning_rate=3.0e-4,
         schedule="adaptive",
         gamma=0.99,
@@ -175,8 +183,8 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.007, # 0.005 
-        num_mini_batches=5,
-        num_learning_epochs=10, # 5
+        num_mini_batches=8, #5
+        num_learning_epochs=8, # 5
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
         gamma=0.99,
@@ -195,13 +203,13 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
             "component": "Component_anymal_c_jump_flat"
         }[mode]
     num_steps_per_env = 24
-    max_iterations =4000  # Increased for more training
+    max_iterations = 2500 # 4000  # Increased for more training
     save_interval = 200
     empirical_normalization = False
 
     ############################################
     # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
-    if mode == "scratch" or mode == "residual":
+    if mode == "residual":
         policy = ResCfg()
 
     # USE THIS FOR MoE
@@ -212,13 +220,14 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     if mode == "component":
         policy = CompoCfg()
 
-    # Train from scratch nominal policy
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
-        activation="elu",
-    )
+    # # Train from scratch nominal policy
+    if mode == "scratch":
+        policy = RslRlPpoActorCriticCfg(
+            init_noise_std=1.0,
+            actor_hidden_dims=[512, 256, 128],
+            critic_hidden_dims=[512, 256, 128],
+            activation="elu",
+        )
     ############################################
 
     algorithm = RslRlPpoAlgorithmCfg(
@@ -226,7 +235,7 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.008,
-        num_mini_batches=4,
+        num_mini_batches=8, #4
         num_learning_epochs=8,
         learning_rate=2.0e-4,
         schedule="adaptive",
@@ -239,26 +248,20 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class AnymalJumpRoughPPORunnerCfg(AnymalJumpFlatPPORunnerCfg):
-    experiment_name = "anymal_c_jump_rough"
-
-    if mode == "scratch" or mode == "residual":
-        policy = ResCfg()
-
-    # USE THIS FOR MoE
-    if mode == "MoE":
-        policy = MoECfg()
-
-    # USE THIS FOR COMPONENT
-    if mode == "component":
-        policy = CompoCfg()
-
+    # experiment_name = "anymal_c_jump_rough"
+    experiment_name = {
+            "scratch": "anymal_c_jump_rough",
+            "MoE": "MoE16_anymal_c_jump_rough",    
+            "residual": "Residual_anymal_c_jump_rough",
+            "component": "Component_anymal_c_jump_rough"
+        }[mode]
     # Slightly different hyperparameters for jump on rough terrain
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0, # 1.0
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.008, # 0.005
-        num_mini_batches=4,
+        num_mini_batches=8, #4
         num_learning_epochs=8, # 5
         learning_rate=2.0e-4, # 1e-4
         schedule="adaptive",
