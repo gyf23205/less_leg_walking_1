@@ -11,11 +11,11 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
+    actor_hidden_dims: list[int] = [128, 64] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    gating_hidden_dims: list[int] = [64,32]#[64, 32] # gating network
-    weight_hidden_dims: list[int] = [64, 32] # wieght network
+    gating_hidden_dims: list[int] = [64, 32] # gating network
+    weight_hidden_dims: list[int] = [32] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
@@ -335,8 +335,8 @@ class MoEActorCritic(ActorCritic):
 
         # # Initialize the gate to strongly favor the KAE pathway at the start.
         # # A large positive bias means sigmoid(logit) will be close to 1.0.
-        with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(3.0)
+        # with torch.no_grad():
+        #     self.gating_network[-1].bias.data.fill_(1.0)
         #     # self.mlp_network[-1].weight.data.fill_(0.0)
         #     # self.mlp_network[-1].bias.data.fill_(0.0)
 

@@ -187,12 +187,12 @@ class LessLegWalkingEnv(DirectRLEnv):
         forward_velocity = self._robot.data.root_lin_vel_b[:, 0]  # x-velocity in body frame
         forward_progress = torch.clamp(forward_velocity, 0.0, 2.0)  # Reward positive forward motion
 
-        # try:
-        #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
-        # except: 
-        #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+        try:
+            action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
+        except: 
+            action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
 
-        action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
+        # action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
         weight_stability = torch.zeros(self.num_envs, device=self.device)
         # # Give more rewawrd for using KAE ####################################
         # # Give more reward for using KAE (observation-based skills)
