@@ -1,3 +1,5 @@
+import datetime
+
 from pytest import param
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
@@ -11,12 +13,22 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
+    actor_hidden_dims: list[int] = [512, 256, 128] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    gating_hidden_dims: list[int] = [128, 64, 32]#[64, 32] # gating network
-    weight_hidden_dims: list[int] = [32] # wieght network
+    gating_hidden_dims: list[int] = [16]#[64, 32] # gating network
+    weight_hidden_dims: list[int] = [16] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
+    
+
+    # Experiment log    
+                            #  res                        g          gbias                w                NOTE
+    # 2026-08-12_22-14-44     [512, 128, 64]             [16]        none            [256, 128, 64] 
+    # 2026-08-13_09-30-45     [512, 128, 64]             [16]        1               [16] 
+    # 2026-08-13_16-53-54     [512, 256, 128]            [8]         none            [64]
+    # Consistent problem on less-leg-roguh and jump-rough; but works well for less-leg-flat
+    #                         ''                          "0"        none             ''
+    #                         [512, 256, 128]            [8]         none            [64]                  w part fix
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
     kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
@@ -69,6 +81,10 @@ class MoEActorCritic(ActorCritic):
         self.ext = True
         self.n_experts = n_experts
         self.training_steps = 0  # To track training steps for noise scheduling
+        self._fwd = 0
+        from datetime import datetime
+        self._f = open(f"/tmp/gate_{datetime.now():%m%d_%H%M%S}.csv", "w", buffering=1)
+        self._temporal_input_dim = 0
        
         # Extract custom params from kwargs to avoid conflicts
         # self.raw_obs_dim = kwargs.pop('raw_obs_dim', 226)
@@ -208,25 +224,14 @@ class MoEActorCritic(ActorCritic):
             )
 
         else:
-            kae_approx_file = os.environ[
-                "CRL_KAE_APPROX_FILE"
-            ]
+            kae_approx_file = os.environ["CRL_KAE_APPROX_FILE"]
 
-            module_spec = (
-                importlib.util.spec_from_file_location(
-                    "crl_kae_approx",
-                    kae_approx_file,
-                )
+            module_spec = (importlib.util.spec_from_file_location("crl_kae_approx",kae_approx_file,)
             )
 
-            if (
-                module_spec is None
-                or module_spec.loader is None
-            ):
-                raise ImportError(
-                    "Unable to load KAE_approx.py: "
-                    + kae_approx_file
-                )
+            if (module_spec is None
+                or module_spec.loader is None):
+                raise ImportError("Unable to load KAE_approx.py: "+ kae_approx_file)
 
             kae_module = (
                 importlib.util.module_from_spec(
@@ -261,11 +266,9 @@ class MoEActorCritic(ActorCritic):
                 for kae in self.kaes
             )
 
-            self.n_experts = len(
-                self.kaes
-            )
+            self.n_experts = len(self.kaes)
 
-               # 1. MLP Network (learns residual correction)
+        # 1. MLP Network (learns residual correction)
         mlp_layers = []
         input_dim = self.num_actor_obs
         for h in self.actor_hidden_dims:
@@ -306,37 +309,43 @@ class MoEActorCritic(ActorCritic):
                 expert_output_dim,
             )
         )
+        self._temporal_input_dim = input_dim
+
 
         self.expert_weight_network = nn.Sequential(
             *expert_weight_layers
         )
 
-        with torch.no_grad():
-            final_layer = (
-                self.expert_weight_network[-1]
-            )
-
-            final_layer.weight.data.fill_(0.0)
-
-            final_layer.bias.data = torch.ones(
-                expert_output_dim,
-                device=final_layer.bias.device,
-            )
+        # # w의 final layer만
+        # nn.init.orthogonal_(self.expert_weight_network[-1].weight, gain=0.1)
+        # nn.init.zeros_(self.expert_weight_network[-1].bias)
                 
         # 3. Gating Network (learns when to trust KAE vs MLP)
+        # self.act_dim, self._temporal_input_dim, self.total_modes
         gating_layers = []
-        input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
+        input_dim = self.num_actor_obs
         for h in self.gating_hidden_dims:
             gating_layers.append(nn.Linear(input_dim, h))
             gating_layers.append(nn.ELU())
             input_dim = h
         gating_layers.append(nn.Linear(input_dim, 1))
+
         self.gating_network = nn.Sequential(*gating_layers)
+
+        # gating_layers = []
+        # input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
+        # for h in self.gating_hidden_dims:
+        #     gating_layers.append(nn.Linear(input_dim, h))
+        #     gating_layers.append(nn.ELU())
+        #     input_dim = h
+        # gating_layers.append(nn.Linear(input_dim, 1))
+
+        # self.gating_network = nn.Sequential(*gating_layers)
 
         # # Initialize the gate to strongly favor the KAE pathway at the start.
         # # A large positive bias means sigmoid(logit) will be close to 1.0.
         with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(3.0)
+            self.gating_network[-1].bias.data.fill_(1.0) # <- this is g_bias
         #     # self.mlp_network[-1].weight.data.fill_(0.0)
         #     # self.mlp_network[-1].bias.data.fill_(0.0)
 
@@ -403,56 +412,29 @@ class MoEActorCritic(ActorCritic):
 
         padded_obs = self._prep_obs(obs, skip_norm=True)
 
-        # with torch.no_grad():
-        #     _, latent_z, _ = self.kae(padded_obs)
-        #     if latent_z.ndim == 1:
-        #         latent_z = latent_z.unsqueeze(0)
-        #     experts_outputs = get_experts_outputs(self.kae, latent_z, self.p, self.act_dim)  # [B, 16, 12]
-        
-        # # Get weights for each KAE expert using the original, unnormalized 'obs'
-        # expert_weights = self.expert_weight_network(obs)
-        # kae_actions = torch.sum(expert_weights.view(-1, self.observable_dim, 1) * experts_outputs, dim=1)
         if not self.crl_mode:
             # Original standalone behavior.
             with torch.no_grad():
-                _, latent_z, _ = self.kae(
-                    padded_obs
-                )
+                _, latent_z, _ = self.kae(padded_obs)
 
                 if latent_z.ndim == 1:
-                    latent_z = (
-                        latent_z.unsqueeze(0)
-                    )
+                    latent_z = (latent_z.unsqueeze(0))
 
-                experts_outputs = (
-                    get_experts_outputs(
-                        self.kae,
-                        latent_z,
-                        self.p,
-                        self.act_dim,
-                    )
-                )
+                experts_outputs = (get_experts_outputs(self.kae,latent_z,self.p,self.act_dim,))
 
-            expert_mode_count = (
-                self.observable_dim
-            )
+            expert_mode_count = (self.observable_dim)
 
         else:
             all_expert_outputs = []
 
             with torch.no_grad():
                 for kae in self.kaes:
-                    _, latent_z, _ = kae(
-                        padded_obs
-                    )
+                    _, latent_z, _ = kae(padded_obs)
 
                     if latent_z.ndim == 1:
-                        latent_z = (
-                            latent_z.unsqueeze(0)
-                        )
+                        latent_z = (latent_z.unsqueeze(0))
 
-                    expert_outputs = (
-                        get_experts_outputs(
+                    expert_outputs = (get_experts_outputs(
                             kae,
                             latent_z,
                             self.p,
@@ -469,29 +451,18 @@ class MoEActorCritic(ActorCritic):
                 dim=1,
             )
 
-            expert_mode_count = (
-                self.total_modes
-            )
+            expert_mode_count = (self.total_modes)
 
-        expert_weights = (
-            self.expert_weight_network(obs)
-        )
+        expert_weights = (self.expert_weight_network(obs))
 
-        kae_actions = torch.sum(
-            expert_weights.view(
-                -1,
-                expert_mode_count,
-                1,
-            )
-            * experts_outputs,
-            dim=1,
-        )
+        kae_actions = torch.sum(expert_weights.view(-1,expert_mode_count,1,)* experts_outputs,dim=1,)
         
         # 2. MLP pathway (residual) - uses the original, unnormalized 'obs'
         mlp_actions = self.mlp_network(obs)
         
         # 3. Gate decides blending - uses the original, unnormalized 'obs'
-        gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
+        # gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
+        gating_input = torch.cat([obs], dim=1)
         gate_logit = self.gating_network(gating_input)
         gate = torch.sigmoid(gate_logit)
 
@@ -507,8 +478,45 @@ class MoEActorCritic(ActorCritic):
         + (1.0 - gate) * mlp_actions    )
 
         self.last_expert_weights = expert_weights.detach()
-            
-            
+
+        # m = kae_actions.mean(dim=0)   # 배치 평균 (action_dim,)
+        # s = kae_actions.std(dim=0)    # 배치 표준편차 (action_dim,)
+        # print("kae  const:", m.abs().mean().item(), " var:", s.mean().item())
+
+        # assert torch.isfinite(obs).all(), "obs has NaN"
+
+        # m2 = mlp_actions.mean(dim=0)
+        # s2 = mlp_actions.std(dim=0)
+        # print("res  const:", m2.abs().mean().item(), " var:", s2.mean().item())
+        # g_mean = torch.sigmoid(gate_logit).mean().item()
+        # kae_var = s.mean().item()
+        # res_var = s2.mean().item()
+        # ratio = (g_mean * kae_var) / ((1 - g_mean) * res_var)
+        # print("KMD share:", ratio)
+
+        g = torch.sigmoid(gate_logit)
+        # print("g mean:", g.mean().item(), " std:", g.std().item())
+        if not torch.is_grad_enabled():
+            self._fwd += 1
+            self._f.write(f"{self._fwd},{g.mean().item()},{g.std().item()}\n") 
+
+        # def chk(name, t):
+        #     if not torch.isfinite(t).all():
+        #         raise RuntimeError(
+        #             f"[NaN] {name} | shape={tuple(t.shape)} "
+        #             f"min={t[torch.isfinite(t)].min() if torch.isfinite(t).any() else 'all-bad'} "
+        #             f"max={t[torch.isfinite(t)].max() if torch.isfinite(t).any() else 'all-bad'}"
+        #         )
+
+        # chk("obs", obs)
+        # chk("experts_outputs", experts_outputs)
+        # chk("expert_weights", expert_weights)
+        # chk("kae_actions", kae_actions)
+        # chk("res_out", mlp_actions)
+        # chk("actions", actions)
+
+
+
         return actions
             
        
