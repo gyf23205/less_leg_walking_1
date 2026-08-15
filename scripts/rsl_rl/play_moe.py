@@ -178,26 +178,43 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         policy_nn = runner.alg.actor_critic
 
     checkpoint = torch.load(resume_path, map_location=agent_cfg.device, weights_only=False)
-    use_custom_actor = isinstance(checkpoint, dict) and "actor" in checkpoint
+    # use_custom_actor = isinstance(checkpoint, dict) and "actor" in checkpoint
 
-    if use_custom_actor:
-        # custom checkpoint saved by train_moe.py: {"actor": model.actor, "critic": model.critic, "obs_range": ...}
-        print("[INFO]: Detected custom checkpoint format, loading 'actor' module directly as the policy.")
-        policy_nn.actor = checkpoint["actor"].to(agent_cfg.device)
-        if checkpoint.get("critic") is not None:
-            policy_nn.critic = checkpoint["critic"].to(agent_cfg.device)
-        policy_nn.eval()
+    # if use_custom_actor:
+    #     # custom checkpoint saved by train_moe.py: {"actor": model.actor, "critic": model.critic, "obs_range": ...}
+    #     print("[INFO]: Detected custom checkpoint format, loading 'actor' module directly as the policy.")
+    #     policy_nn.actor = checkpoint["actor"].to(agent_cfg.device)
+    #     if checkpoint.get("critic") is not None:
+    #         policy_nn.critic = checkpoint["critic"].to(agent_cfg.device)
+    #     policy_nn.eval()
 
-        def policy(obs):
-            with torch.no_grad():
-                obs_t = policy_nn.get_actor_obs(obs)
-                obs_t = policy_nn.actor_obs_normalizer(obs_t)
-                return policy_nn.actor(obs_t)
+    #     def policy(obs):
+    #         with torch.no_grad():
+    #             obs_t = policy_nn.get_actor_obs(obs)
+    #             obs_t = policy_nn.actor_obs_normalizer(obs_t)
+    #             return policy_nn.actor(obs_t)
 
-    else:
-        runner.load(resume_path)
-        # obtain the trained policy for inference
-        policy = runner.get_inference_policy(device=env.unwrapped.device)
+    # else:
+
+    # --- checkpoint 키 이름 보정 (kaes.0.* -> kae.*) ---
+    _policy = runner.alg.policy
+    _orig_load = _policy.load_state_dict
+
+    def _remap_load(state_dict, *args, **kwargs):
+        fixed, n = {}, 0
+        for k, v in state_dict.items():
+            if k.startswith("kaes.0."):
+                k = k.replace("kaes.0.", "kae.", 1); n += 1
+            fixed[k] = v
+        print(f"[remap] {n} keys renamed")
+        return _orig_load(fixed, *args, **kwargs)
+
+    _policy.load_state_dict = _remap_load
+    # ---------------------------------------------------
+
+    runner.load(resume_path)
+    # obtain the trained policy for inference
+    policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # disable normalizers to avoid 226->256 mismatch during play
     # Note: 'policy' is a bound method, so we must modify 'policy_nn' (the module)
@@ -229,8 +246,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            if not use_custom_actor:
+
+            needs_pad = not isinstance(policy_nn, MoEActorCritic)
+            if needs_pad:
                 obs["policy"] = _pad_to_dim(obs["policy"], 256)
+
+            # if not use_custom_actor:
+            #     obs["policy"] = _pad_to_dim(obs["policy"], 256)
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)

@@ -155,9 +155,11 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     stability_reward_scale = 0.5  # Reduced to not dominate other rewards
     forward_progress_reward_scale = 2.0  # New reward for forward progress
     # penalty for large raw action norms (MoE sidecar, keep negative to penalize)
-    action_norm_scale = -0.1
+    # action_norm_scale = -0.1
     # sensitivity penalty for rapid changes in expert-selection weights (MoE); name kept as used in code
-    weight_sensitivty_scale = -0.1
+    # weight_sensitivty_scale = -0.1
+    MoE_magnitude_penality_scale = -0.000
+
 
     # we add a height scanner for perceptive locomotion
     height_scanner = RayCasterCfg(
@@ -277,9 +279,11 @@ class AnymalCFlatEnvCfg(DirectRLEnvCfg):
     undesired_contact_reward_scale = -1.0
     flat_orientation_reward_scale = -5.0
     # penalty for large raw action norms (MoE sidecar)
-    action_norm_scale = -0.1
+    # action_norm_scale = -0.1
     # sensitivity penalty for expert-selection weights (misspelling preserved)
-    weight_sensitivty_scale = -0.1
+    # weight_sensitivty_scale = -0.1
+    MoE_magnitude_penality_scale = -0.000
+
 
 
 @configclass
@@ -386,7 +390,9 @@ class AnymalJumpEnvCfg(DirectRLEnvCfg):
     action_rate_penalty_scale = -0.0025
     action_penalty_pushoff_factor = 0.30
     action_rate_penalty_pushoff_factor = 0.35
+    MoE_magnitude_penality_scale = -0.000
 
+@configclass
 class AnymalJumpRoughEnvCfg(AnymalJumpEnvCfg):
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",

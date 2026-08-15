@@ -13,11 +13,11 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [512, 256, 128] # Residual net
+    actor_hidden_dims: list[int] = [128, 64, 32] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    gating_hidden_dims: list[int] = [16]#[64, 32] # gating network
-    weight_hidden_dims: list[int] = [16] # wieght network
+    gating_hidden_dims: list[int] = [64, 32] #[64, 32] # gating network
+    weight_hidden_dims: list[int] = [64, 32] # wieght network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
     
 
@@ -29,6 +29,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     # Consistent problem on less-leg-roguh and jump-rough; but works well for less-leg-flat
     #                         ''                          "0"        none             ''
     #                         [512, 256, 128]            [8]         none            [64]                  w part fix
+    # Gate network now does not take KAE and res output as input
+    #
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
     kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
@@ -117,36 +119,26 @@ class MoEActorCritic(ActorCritic):
         self.crl_kae_paths = []
 
         if self.crl_mode:
-            kae_directory = Path(
-                os.environ["CRL_KAE_DIRECTORY"]
-            )
+            kae_directory = Path(os.environ["CRL_KAE_DIRECTORY"])
 
-            task_names = os.environ[
-                "CRL_KAE_TASKS"
-            ].split("|")
+            task_names = os.environ["CRL_KAE_TASKS"].split("|")
 
             for task_name in task_names:
                 if not task_name:
                     continue
 
                 kae_file = (
-                    kae_directory
+                    kae_directory 
                     / f"{task_name}_KAE.pth"
                 )
 
                 if not kae_file.is_file():
-                    raise FileNotFoundError(
-                        str(kae_file)
-                    )
+                    raise FileNotFoundError(str(kae_file))
 
-                self.crl_kae_paths.append(
-                    kae_file
-                )
+                self.crl_kae_paths.append(kae_file)
 
             if not self.crl_kae_paths:
-                raise RuntimeError(
-                    "No previous-task KAE was provided."
-                )
+                raise RuntimeError("No previous-task KAE was provided.")
 
         # get the observation dimensions
         self.obs_groups = obs_groups
@@ -219,34 +211,20 @@ class MoEActorCritic(ActorCritic):
 
             self.kae.eval()
 
-            self.total_modes = (
-                self.observable_dim
-            )
+            self.total_modes = (self.observable_dim)
 
         else:
             kae_approx_file = os.environ["CRL_KAE_APPROX_FILE"]
 
-            module_spec = (importlib.util.spec_from_file_location("crl_kae_approx",kae_approx_file,)
-            )
+            module_spec = (importlib.util.spec_from_file_location("crl_kae_approx",kae_approx_file,))
 
             if (module_spec is None
                 or module_spec.loader is None):
                 raise ImportError("Unable to load KAE_approx.py: "+ kae_approx_file)
 
-            kae_module = (
-                importlib.util.module_from_spec(
-                    module_spec
-                )
-            )
-
-            sys.modules[module_spec.name] = (
-                kae_module
-            )
-
-            module_spec.loader.exec_module(
-                kae_module
-            )
-            
+            kae_module = (importlib.util.module_from_spec(module_spec))
+            sys.modules[module_spec.name] = (kae_module)
+            module_spec.loader.exec_module(kae_module)            
             self.kaes = nn.ModuleList()
 
             for kae_file in self.crl_kae_paths:
@@ -332,22 +310,12 @@ class MoEActorCritic(ActorCritic):
 
         self.gating_network = nn.Sequential(*gating_layers)
 
-        # gating_layers = []
-        # input_dim = self.num_actor_obs  + self.act_dim + self.act_dim
-        # for h in self.gating_hidden_dims:
-        #     gating_layers.append(nn.Linear(input_dim, h))
-        #     gating_layers.append(nn.ELU())
-        #     input_dim = h
-        # gating_layers.append(nn.Linear(input_dim, 1))
-
-        # self.gating_network = nn.Sequential(*gating_layers)
-
-        # # Initialize the gate to strongly favor the KAE pathway at the start.
-        # # A large positive bias means sigmoid(logit) will be close to 1.0.
         with torch.no_grad():
             self.gating_network[-1].bias.data.fill_(1.0) # <- this is g_bias
         #     # self.mlp_network[-1].weight.data.fill_(0.0)
         #     # self.mlp_network[-1].bias.data.fill_(0.0)
+
+        self.g_min = 0.1 # <- this is g_min
 
 
     def _extract_obs_tensor(self, obs):
@@ -402,6 +370,7 @@ class MoEActorCritic(ActorCritic):
     def forward(self, obs): # DEBUG Override all the functions that need actions.
         
         temp = obs.size()
+        # print("obs size:", temp)
         assert temp[1]==235, "observation is not 235 dim"
 
         if torch.isnan(obs).any() or torch.isinf(obs).any():
@@ -421,7 +390,6 @@ class MoEActorCritic(ActorCritic):
                     latent_z = (latent_z.unsqueeze(0))
 
                 experts_outputs = (get_experts_outputs(self.kae,latent_z,self.p,self.act_dim,))
-
             expert_mode_count = (self.observable_dim)
 
         else:
@@ -455,32 +423,37 @@ class MoEActorCritic(ActorCritic):
 
         expert_weights = (self.expert_weight_network(obs))
 
-        kae_actions = torch.sum(expert_weights.view(-1,expert_mode_count,1,)* experts_outputs,dim=1,)
-        
+        kae_actions = torch.sum(expert_weights.view(-1,expert_mode_count,1,)* experts_outputs,dim=1,)       
         # 2. MLP pathway (residual) - uses the original, unnormalized 'obs'
         mlp_actions = self.mlp_network(obs)
-        
+
+       
         # 3. Gate decides blending - uses the original, unnormalized 'obs'
         # gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
         gating_input = torch.cat([obs], dim=1)
         gate_logit = self.gating_network(gating_input)
-        gate = torch.sigmoid(gate_logit)
+        # gate = torch.sigmoid(gate_logit)
+        gate = self.g_min + (1.0 - self.g_min) * torch.sigmoid(gate_logit)
 
-        # Track the gate for logging (mean over the batch, averaged across calls per iteration)
-        gate_detached = gate.detach()
-        self.last_gate = gate_detached
-        self._gate_running_sum += gate_detached.mean().item()
-        self._gate_running_count += 1
+        # # Track the gate for logging (mean over the batch, averaged across calls per iteration)
+        # gate_detached = gate.detach()
+        # self.last_gate = gate_detached
+        # self._gate_running_sum += gate_detached.mean().item()
+        # self._gate_running_count += 1
 
         # 4. Blend the two pathways
         actions = (
         gate * kae_actions
         + (1.0 - gate) * mlp_actions    )
 
-        self.last_expert_weights = expert_weights.detach()
+        if not torch.is_grad_enabled():
+            self.last_expert_weights = expert_weights.detach()
+            self.last_kae_actions = kae_actions.detach()
+            self.last_mlp_actions = mlp_actions.detach()
+            self.last_gate = gate.detach()
 
-        # m = kae_actions.mean(dim=0)   # 배치 평균 (action_dim,)
-        # s = kae_actions.std(dim=0)    # 배치 표준편차 (action_dim,)
+        # m = kae_actions.mean(dim=0)   
+        # s = kae_actions.std(dim=0)   
         # print("kae  const:", m.abs().mean().item(), " var:", s.mean().item())
 
         # assert torch.isfinite(obs).all(), "obs has NaN"

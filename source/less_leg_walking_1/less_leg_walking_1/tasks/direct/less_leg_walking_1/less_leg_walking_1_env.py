@@ -57,12 +57,10 @@ class LessLegWalkingEnv(DirectRLEnv):
                 "sensitivity",
             ]
         }
-        # Create episode reward accumulators here (outside any inference-mode context)
-        # rather than lazily in _get_rewards: a task-switch detection eval runs the first
-        # _get_rewards() inside torch.inference_mode(), which would make lazily-created
-        # tensors "inference tensors" and break later in-place += in the training loop.
+
         self._episode_core_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         # Updated feet detection for 3-legged robot (exclude RF foot)
@@ -191,17 +189,19 @@ class LessLegWalkingEnv(DirectRLEnv):
         # # Give more reward for using KAE (observation-based skills)
         # # bias_to_skill_reward = torch.zeros(self.num_envs, device=self.device)       
 
-        # # weight sensitivty
-        # try:
-        #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
-        # except: 
-        #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
-
-        # # action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
-
-
         action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
-        weight_stability = torch.zeros(self.num_envs, device=self.device)
+
+        if self._policy_ref.last_expert_weights is not None:
+            # current_weights = self._policy_ref.last_expert_weights # [16 experts]
+            # weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
+            # self._prev_expert_weights = current_weights.clone()
+
+            current_weights = self._policy_ref.last_expert_weights # [16 experts]
+            weight_stability = torch.sum(torch.square(current_weights), dim=1)
+        else:
+            weight_stability = torch.zeros(self.num_envs, device=self.device)
+
+        # weight_stability = torch.zeros(self.num_envs, device=self.device)
         # try:
         #     current_weights = self._policy_ref.last_expert_weights # [16 experts]
         #     weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
@@ -214,21 +214,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         #     except:    
         #         pass
 
-        # # try:
-        # #     current_weights = self._policy_ref.last_expert_weights # [16 experts]
-        # #     action_norm_penalty = torch.sum(torch.square(self.full_action_for_KAE), dim=1)
-
-        # #     # Penalize the variance/jitter of the expert selection.
-        # #     # For a phantom leg, the weights often fluctuate wildly as the network 
-        # #     # 'searches' for feedback. This dampens that search.
-        # #     weight_stability = torch.sum(torch.square(current_weights - self._prev_expert_weights), dim=1)
-
-        # #     # Update buffer
-        # #     self._prev_expert_weights = current_weights.clone()
-        # # except:
-        # #     weight_stability = torch.zeros(self.num_envs, device=self.device)
-        # #     action_norm_penalty = torch.zeros(self.num_envs, device=self.device)
-
+    
 
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
@@ -264,7 +250,8 @@ class LessLegWalkingEnv(DirectRLEnv):
         # (_episode_core_reward / _episode_full_reward are initialised in __init__)
         self._episode_core_reward += reward_without_MoE_only
         self._episode_full_reward += reward
-        self._last_reward_mean = reward.mean().item()
+
+        # self._last_reward_mean = reward.mean().item()
 
 
         return reward
@@ -323,16 +310,16 @@ class LessLegWalkingEnv(DirectRLEnv):
             self._episode_sums[key][env_ids] = 0.0
 
         # Log core mean reward (matching RSL-RL's Mean reward format)
-        if hasattr(self, '_episode_core_reward') and hasattr(self, '_episode_full_reward'):
-            core_mean = torch.mean(self._episode_core_reward[env_ids]).item()
-            full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
-            
-            extras["train/core_mean_reward"] = core_mean
-            extras["train/full_mean_reward"] = full_mean
-            extras["train/MoE_only_reward(penality) contribution"] = full_mean - core_mean
-            
-            self._episode_core_reward[env_ids] = 0.0
-            self._episode_full_reward[env_ids] = 0.0
+        # if hasattr(self, '_episode_core_reward') and hasattr(self, '_episode_full_reward'):
+        core_mean = torch.mean(self._episode_core_reward[env_ids]).item()
+        full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
+        
+        extras["train/core_mean_reward"] = core_mean
+        extras["train/full_mean_reward"] = full_mean
+        extras["train/MoE_only_reward(penality) contribution"] = full_mean - core_mean
+        
+        self._episode_core_reward[env_ids] = 0.0
+        self._episode_full_reward[env_ids] = 0.0
             
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
@@ -533,16 +520,32 @@ class AnymalCEnv(DirectRLEnv):
             self._episode_sums[key][env_ids] = 0.0
         # AnymalCEnv has no MoE-only penalty terms in its reward dict, so core reward equals full reward
         full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
-        extras["train/core_mean_reward"] = full_mean
+        # extras["train/core_mean_reward"] = full_mean
+        # extras["train/full_mean_reward"] = full_mean
+        # extras["train/MoE_only_reward(penality) contribution"] = 0.0
+        # self._episode_full_reward[env_ids] = 0.0
+
+                # Log core mean reward (matching RSL-RL's Mean reward format)
+        # if hasattr(self, '_episode_core_reward') and hasattr(self, '_episode_full_reward'):
+        core_mean = torch.mean(self._episode_core_reward[env_ids]).item()
+        full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
+        
+        extras["train/core_mean_reward"] = core_mean
         extras["train/full_mean_reward"] = full_mean
-        extras["train/MoE_only_reward(penality) contribution"] = 0.0
+        extras["train/MoE_only_reward(penality) contribution"] = full_mean - core_mean
+        
+        self._episode_core_reward[env_ids] = 0.0
         self._episode_full_reward[env_ids] = 0.0
+
+
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
         extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"].update(extras)
+
+
 
 
 
@@ -596,8 +599,12 @@ class AnymalJumpEnv(DirectRLEnv):
                 "yaw_rate",
                 "action",
                 "action_rate",
+                "MoE_magnitude_penality",
             ]
         }
+
+        self._episode_core_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        self._episode_full_reward = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -801,6 +808,16 @@ class AnymalJumpEnv(DirectRLEnv):
         action_penalty = torch.sum(torch.square(self._actions), dim=1) * action_scale
         action_rate_penalty = torch.sum(torch.square(self._actions - self._prev_actions), dim=1) * action_rate_scale
 
+        # MoE_magnitude_penality = self._policy_ref.last_kae_actions.pow(2).mean() + self._policy_ref.last_mlp_actions.pow(2).mean()
+        
+        MoE_magnitude_penality = torch.zeros(self.num_envs, device=self.device)
+        if hasattr(self, "_policy_ref") and self._policy_ref is not None:
+            kae = self._policy_ref.last_kae_actions
+            res = self._policy_ref.last_mlp_actions
+            g = self._policy_ref.last_gate
+            MoE_magnitude_penality = torch.sum(torch.square(g*kae), dim=1) + torch.sum(torch.square((1.0 - g) * res), dim=1)
+           
+
         rewards = {
             "height": height_reward * self.cfg.height_reward_scale * self.step_dt,
             "takeoff_velocity": takeoff_velocity * self.cfg.takeoff_velocity_reward_scale * self.step_dt,
@@ -818,7 +835,9 @@ class AnymalJumpEnv(DirectRLEnv):
             "yaw_rate": yaw_rate_penalty * self.cfg.yaw_rate_penalty_scale * self.step_dt,
             "action": action_penalty * self.cfg.action_penalty_scale * self.step_dt,
             "action_rate": action_rate_penalty * self.cfg.action_rate_penalty_scale * self.step_dt,
+            "MoE_magnitude_penality": MoE_magnitude_penality * self.cfg.MoE_magnitude_penality_scale * self.step_dt,
         }
+
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
         # Divergence safety net: keep the per-step training reward finite so a physically
         # unstable step (e.g. a residual policy destabilising the robot on rough terrain)
@@ -846,7 +865,13 @@ class AnymalJumpEnv(DirectRLEnv):
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+
+        reward_without_MoE_only = reward - (MoE_magnitude_penality * self.cfg.MoE_magnitude_penality_scale * self.step_dt)                 
+        # Let's return the FULL reward for training, but track core separately
+        # (_episode_core_reward / _episode_full_reward are initialised in __init__)
+        self._episode_core_reward += reward_without_MoE_only
         self._episode_full_reward += reward
+        # self._last_reward_mean = reward.mean().item()
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -872,11 +897,19 @@ class AnymalJumpEnv(DirectRLEnv):
             extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
             self._episode_sums[key][env_ids] = 0.0
         # AnymalJumpEnv has no MoE-only penalty terms in its reward dict, so core reward equals full reward
+        # full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
+                # Log core mean reward (matching RSL-RL's Mean reward format)
+
+        core_mean = torch.mean(self._episode_core_reward[env_ids]).item()
         full_mean = torch.mean(self._episode_full_reward[env_ids]).item()
-        extras["train/core_mean_reward"] = full_mean
+        
+        extras["train/core_mean_reward"] = core_mean
         extras["train/full_mean_reward"] = full_mean
-        extras["train/MoE_only_reward(penality) contribution"] = 0.0
+        extras["train/MoE_only_reward(penality) contribution"] = full_mean - core_mean
+        
+        self._episode_core_reward[env_ids] = 0.0
         self._episode_full_reward[env_ids] = 0.0
+
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
@@ -943,3 +976,5 @@ class AnymalJumpEnv(DirectRLEnv):
         self._jump_time[env_ids] = torch.zeros_like(base_z).uniform_(0.0, cycle_s)
         self._desired_z[env_ids] = self._base_z[env_ids]
         self._desired_vz[env_ids] = 0.0
+
+     

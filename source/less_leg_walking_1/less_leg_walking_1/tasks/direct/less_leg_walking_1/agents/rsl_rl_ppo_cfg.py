@@ -7,8 +7,8 @@ from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
 
-# mode = "scratch"  # Choose from "scratch", "residual", "MoE", or "component"
-mode = "MoE"  # Choose from "scratch", "residual", "MoE", or "component"
+mode = "scratch"  # Choose from "scratch", "residual", "MoE", or "component"
+# mode = "MoE"  # Choose from "scratch", "residual", "MoE", or "component"
 
 # ############################################
 # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
