@@ -433,8 +433,8 @@ class MoEActorCritic(ActorCritic):
         gating_input = torch.cat([obs], dim=1)
         gate_logit = self.gating_network(gating_input)
 
-        gate = torch.sigmoid(gate_logit)
-        # gate = self.g_min + (1.0 - self.g_min) * torch.sigmoid(gate_logit)
+        # gate = torch.sigmoid(gate_logit)
+        gate = self.g_min + (1.0 - self.g_min) * torch.sigmoid(gate_logit)
 
         # # Track the gate for logging (mean over the batch, averaged across calls per iteration)
         # gate_detached = gate.detach()
@@ -468,11 +468,11 @@ class MoEActorCritic(ActorCritic):
         # ratio = (g_mean * kae_var) / ((1 - g_mean) * res_var)
         # print("KMD share:", ratio)
 
-        g = torch.sigmoid(gate_logit)
         # print("g mean:", g.mean().item(), " std:", g.std().item())
+        gate_log = gate.detach()
         if not torch.is_grad_enabled():
             self._fwd += 1
-            self._f.write(f"{self._fwd},{g.mean().item()},{g.std().item()}\n") 
+            self._f.write(f"{self._fwd},{gate_log.mean().item()},{gate_log.std().item()}\n") 
 
         # def chk(name, t):
         #     if not torch.isfinite(t).all():

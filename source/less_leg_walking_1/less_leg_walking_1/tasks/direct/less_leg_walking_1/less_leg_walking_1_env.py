@@ -884,12 +884,12 @@ class AnymalJumpEnv(DirectRLEnv):
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         upright = -self._robot.data.projected_gravity_b[:, 2]
-        base_h = self._robot.data.root_pos_w[:, 2] - self._terrain.env_origins[:, 2]   # ← 상대 높이
+        base_h = self._robot.data.root_pos_w[:, 2] - self._terrain.env_origins[:, 2]   # ← relative base height to terrain origin
         fallen = torch.logical_or(
             base_h < self.cfg.min_base_height,
             upright < math.cos(self.cfg.max_tilt_rad),
         )
-        
+
         return fallen, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
