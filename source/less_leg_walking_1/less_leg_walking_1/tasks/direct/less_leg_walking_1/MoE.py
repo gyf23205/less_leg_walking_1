@@ -432,8 +432,9 @@ class MoEActorCritic(ActorCritic):
         # gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
         gating_input = torch.cat([obs], dim=1)
         gate_logit = self.gating_network(gating_input)
-        # gate = torch.sigmoid(gate_logit)
-        gate = self.g_min + (1.0 - self.g_min) * torch.sigmoid(gate_logit)
+
+        gate = torch.sigmoid(gate_logit)
+        # gate = self.g_min + (1.0 - self.g_min) * torch.sigmoid(gate_logit)
 
         # # Track the gate for logging (mean over the batch, averaged across calls per iteration)
         # gate_detached = gate.detach()
