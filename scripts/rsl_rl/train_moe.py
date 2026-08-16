@@ -118,6 +118,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
 
+    # Tag the run directory with the CRL session so concurrent trials stay distinguishable.
+    _crl_session = os.environ.get("CRL_SESSION_ID")
+    if _crl_session:
+        agent_cfg.run_name = (
+            f"{agent_cfg.run_name}_{_crl_session}" if getattr(agent_cfg, "run_name", "") else _crl_session
+        )
+
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
