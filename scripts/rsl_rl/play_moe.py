@@ -119,6 +119,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
     # assert False
     if args_cli.use_pretrained_checkpoint:
         resume_path = get_published_pretrained_checkpoint("rsl_rl", train_task_name)
@@ -241,6 +249,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset environment
     obs = env.get_observations()
     timestep = 0
+
+    _ret = torch.zeros(env.unwrapped.num_envs, device=env.unwrapped.device)
+    _ep_returns = []
+    _TARGET = 400          
+
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -255,7 +268,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             #     obs["policy"] = _pad_to_dim(obs["policy"], 256)
             actions = policy(obs)
             # env stepping
-            obs, _, _, _ = env.step(actions)
+            # obs, _, _, _ = env.step(actions)
+            obs, rew, dones, extras = env.step(actions)      
+            _ret += rew
+            _done_ids = dones.nonzero(as_tuple=False).squeeze(-1)
+            if _done_ids.numel() > 0:
+                _ep_returns.extend(_ret[_done_ids].tolist())
+                _ret[_done_ids] = 0.0
+                if len(_ep_returns) >= _TARGET:
+                    import statistics
+                    print(f"[EVAL] n={len(_ep_returns)}  mean={statistics.mean(_ep_returns):.3f}  "
+                        f"std={statistics.pstdev(_ep_returns):.3f}")
+                    break
+
+            
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

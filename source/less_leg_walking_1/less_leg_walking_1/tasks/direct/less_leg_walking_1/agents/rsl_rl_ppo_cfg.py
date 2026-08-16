@@ -113,7 +113,7 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
 @configclass
 class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 2500  # Increased for more training
+    max_iterations = 4000 #2500  # Increased for more training
     save_interval = 200
     # experiment_name = "anymal_c_flat_leg_walking"
     # # experiment_name = "anymal_c_rough_leg_walking"
@@ -176,7 +176,7 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
             "residual": "Residual_anymal_c_rough_leg_walking", 
             "component": "Component_anymal_c_rough_leg_walking"
         }[mode]
-    max_iterations = 2500
+    max_iterations = 4000 #2500
     
     # Slightly different hyperparameters for rough terrain
     algorithm = RslRlPpoAlgorithmCfg(

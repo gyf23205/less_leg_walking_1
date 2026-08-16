@@ -155,9 +155,9 @@ class LessLegWalkingFlatEnvCfg(DirectRLEnvCfg):
     stability_reward_scale = 0.5  # Reduced to not dominate other rewards
     forward_progress_reward_scale = 2.0  # New reward for forward progress
     # penalty for large raw action norms (MoE sidecar, keep negative to penalize)
-    # action_norm_scale = -0.1
+    action_norm_scale = -0.1
     # sensitivity penalty for rapid changes in expert-selection weights (MoE); name kept as used in code
-    # weight_sensitivty_scale = -0.1
+    weight_sensitivty_scale = -0.000
     MoE_magnitude_penality_scale = -0.000
 
 

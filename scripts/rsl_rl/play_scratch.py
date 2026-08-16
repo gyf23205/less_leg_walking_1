@@ -183,6 +183,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset environment
     obs = env.get_observations()
     timestep = 0
+
+    _ret = torch.zeros(env.unwrapped.num_envs, device=env.unwrapped.device)
+    _ep_returns = []
+    _TARGET = 400          
+
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -191,7 +196,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # agent stepping
             actions = policy(obs)
             # env stepping
-            obs, _, _, _ = env.step(actions)
+            # obs, _, _, _ = env.step(actions)
+            obs, rew, dones, extras = env.step(actions)      
+            _ret += rew
+            _done_ids = dones.nonzero(as_tuple=False).squeeze(-1)
+            if _done_ids.numel() > 0:
+                _ep_returns.extend(_ret[_done_ids].tolist())
+                _ret[_done_ids] = 0.0
+                if len(_ep_returns) >= _TARGET:
+                    import statistics
+                    print(f"[EVAL] n={len(_ep_returns)}  mean={statistics.mean(_ep_returns):.3f}  "
+                        f"std={statistics.pstdev(_ep_returns):.3f}")
+                    break
+
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video
@@ -202,6 +219,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         sleep_time = dt - (time.time() - start_time)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
+
+    
 
     # close the simulator
     env.close()

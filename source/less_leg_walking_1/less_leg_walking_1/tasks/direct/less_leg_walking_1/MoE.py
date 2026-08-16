@@ -13,7 +13,7 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [128, 64, 32] # Residual net
+    actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
     gating_hidden_dims: list[int] = [64, 32] #[64, 32] # gating network
@@ -315,7 +315,8 @@ class MoEActorCritic(ActorCritic):
         #     # self.mlp_network[-1].weight.data.fill_(0.0)
         #     # self.mlp_network[-1].bias.data.fill_(0.0)
 
-        self.g_min = 0.1 # <- this is g_min
+        self.g_min = 0.0 # <- this is g_min
+        self.g_max = 1.0 # <- this is g_max
 
 
     def _extract_obs_tensor(self, obs):
@@ -472,7 +473,8 @@ class MoEActorCritic(ActorCritic):
         gate_log = gate.detach()
         if not torch.is_grad_enabled():
             self._fwd += 1
-            self._f.write(f"{self._fwd},{gate_log.mean().item()},{gate_log.std().item()}\n") 
+            _std = gate_log.std().item() if gate_log.numel() > 1 else 0.0
+            self._f.write(f"{self._fwd},{gate_log.mean().item()},{_std}\n")
 
         # def chk(name, t):
         #     if not torch.isfinite(t).all():
