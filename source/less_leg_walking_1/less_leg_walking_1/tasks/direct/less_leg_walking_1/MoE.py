@@ -23,8 +23,12 @@ class MoECfg(RslRlPpoActorCriticCfg):
     
 
     # Experiment log    
-                            #  res             g          gbias       weight          wegiht_router                NOTE
-    #                       # [256, 128, 64]   [32]       [1.0]       [32, 16]        [128, 64]                    Original
+                            #  res             g          g_bias    w_bias    weight          wegiht_router                NOTE
+    # 2026-08-17_12-04-15   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32, 16]        [128, 64]                    Good, but not 'significantly better'
+    #                                                                                                                      But be clear, at least 'for now', no worse task than PPO
+
+    # Will be tested
+    # 2026-08-17_           # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [256, 128]
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
     kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
@@ -490,14 +494,11 @@ class MoEActorCritic(ActorCritic):
             )
         expert_weights = torch.cat(branch_weights, dim=1)
 
-
-
         kae_actions = torch.sum(expert_weights.view(-1,expert_mode_count,1,)* experts_outputs,dim=1,)
 
         # 2. MLP pathway (residual) - uses the original, unnormalized 'obs'
         mlp_actions = self.mlp_network(obs)
 
-       
         # 3. Gate decides blending - uses the original, unnormalized 'obs'
         # gating_input = torch.cat([obs, mlp_actions.detach(), kae_actions.detach()], dim=1)
         gating_input = torch.cat([obs], dim=1)
@@ -505,12 +506,6 @@ class MoEActorCritic(ActorCritic):
 
         # gate = torch.sigmoid(gate_logit)
         gate = self.g_min + (1.0 - self.g_min) * torch.sigmoid(gate_logit)
-
-        # # Track the gate for logging (mean over the batch, averaged across calls per iteration)
-        # gate_detached = gate.detach()
-        # self.last_gate = gate_detached
-        # self._gate_running_sum += gate_detached.mean().item()
-        # self._gate_running_count += 1
 
         # 4. Blend the two pathways
         actions = (
