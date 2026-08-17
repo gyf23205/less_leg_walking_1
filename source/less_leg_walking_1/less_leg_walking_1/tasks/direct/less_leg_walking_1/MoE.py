@@ -16,21 +16,15 @@ class MoECfg(RslRlPpoActorCriticCfg):
     actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
-    gating_hidden_dims: list[int] = [64, 32] #[64, 32] # gating network
+    gating_hidden_dims: list[int] = [32] #[64, 32] # gating network
     weight_hidden_dims: list[int] = [32, 16] # wieght network
+    weight_router_hidden_dims: list[int] = [128, 64] # weight router network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
     
 
     # Experiment log    
-                            #  res                        g          gbias                w                NOTE
-    # 2026-08-12_22-14-44     [512, 128, 64]             [16]        none            [256, 128, 64] 
-    # 2026-08-13_09-30-45     [512, 128, 64]             [16]        1               [16] 
-    # 2026-08-13_16-53-54     [512, 256, 128]            [8]         none            [64]
-    # Consistent problem on less-leg-roguh and jump-rough; but works well for less-leg-flat
-    #                         ''                          "0"        none             ''
-    #                         [512, 256, 128]            [8]         none            [64]                  w part fix
-    # Gate network now does not take KAE and res output as input
-    #
+                            #  res             g          gbias       weight          wegiht_router                NOTE
+    #                       # [256, 128, 64]   [32]       [1.0]       [32, 16]        [128, 64]                    Original
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
     kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
@@ -94,6 +88,7 @@ class MoEActorCritic(ActorCritic):
         self.actor_hidden_dims = kwargs.pop('actor_hidden_dims')
         self.critic_hidden_dims = kwargs.pop('critic_hidden_dims')
         self.weight_hidden_dims = kwargs.pop('weight_hidden_dims')
+        self.weight_router_hidden_dims = kwargs.pop('weight_router_hidden_dims')
         self.gating_hidden_dims = kwargs.pop('gating_hidden_dims')
         self.padded_dim = kwargs.pop('padded_dim')
         # self.obs_range = [(torch.inf, -torch.inf) for _ in range(self.padded_dim)]
@@ -314,6 +309,12 @@ class MoEActorCritic(ActorCritic):
             self.expert_weight_networks.append(nn.Sequential(*layers))
         self._temporal_input_dim = input_dim
 
+        # Initialize expert weights with bias toward 1.0
+        with torch.no_grad():
+            for network in self.expert_weight_networks:
+                final_layer = network[-1]
+                final_layer.weight.fill_(0.0)
+                final_layer.bias.fill_(1.0)
                 
         # 3. Gating Network (learns when to trust KAE vs MLP)
         # self.act_dim, self._temporal_input_dim, self.total_modes
@@ -328,13 +329,12 @@ class MoEActorCritic(ActorCritic):
         self.gating_network = nn.Sequential(*gating_layers)
 
         with torch.no_grad():
-            self.gating_network[-1].bias.data.fill_(1.0) # <- this is g_bias
-        #     # self.mlp_network[-1].weight.data.fill_(0.0)
-        #     # self.mlp_network[-1].bias.data.fill_(0.0)
-
+            # self.gating_network[-1].bias.data.fill_(1.0) 
+            self.gating_network[-1].weight.fill_(0.0)
+            self.gating_network[-1].bias.fill_(1.0)  # <- this is g_bias   
+  
         self.g_min = 0.0 # <- this is g_min
         self.g_max = 1.0 # <- this is g_max
-
 
         # KAE-level router. It allocates the unit L1 budget BETWEEN KAEs, while each
         # expert_weight_network (L1-normalised inside its own modes) only decides
@@ -344,7 +344,7 @@ class MoEActorCritic(ActorCritic):
         # global-L1 behaviour.
         router_layers = []
         router_input_dim = self.num_actor_obs
-        for hidden_dim in self.weight_hidden_dims:
+        for hidden_dim in self.weight_router_hidden_dims:
             router_layers.append(nn.Linear(router_input_dim, hidden_dim))
             router_layers.append(nn.ELU())
             router_input_dim = hidden_dim
