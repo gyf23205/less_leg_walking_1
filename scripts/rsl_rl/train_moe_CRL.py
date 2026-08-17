@@ -33,15 +33,6 @@ TRAIN_TASKS = [ # train in this order
     "Less-Leg-Rough-Walking-Direct-v1",
 ]
 
-# TASK_DIRECTORY = Path("source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1")
-
-# KAE_DIRECTORY = TASK_DIRECTORY / "KAEs"
-# KAE_APPROX_FILE = (
-#     TASK_DIRECTORY
-#     / "agents"
-#     / "KAE_approx.py"
-# )
-
 TASK_DIRECTORY = Path("source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1")
 KAE_ROOT = TASK_DIRECTORY / "KAEs"            # shared; holds the original task KAE only
 SESSION_ROOT = KAE_ROOT / "sessions"          # per-session artifacts
