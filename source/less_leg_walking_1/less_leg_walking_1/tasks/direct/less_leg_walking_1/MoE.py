@@ -17,18 +17,22 @@ class MoECfg(RslRlPpoActorCriticCfg):
     # actor_hidden_dims: list[int] = [128, 64, 32]
     critic_hidden_dims: list[int] = [512, 256, 128]
     gating_hidden_dims: list[int] = [32] #[64, 32] # gating network
-    weight_hidden_dims: list[int] = [32, 16] # wieght network
-    weight_router_hidden_dims: list[int] = [128, 64] # weight router network
+    weight_hidden_dims: list[int] = [32] # wieght network
+    weight_router_hidden_dims: list[int] = [128] # weight router network
     # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
     
 
     # Experiment log    
+    # Done
                             #  res             g          g_bias    w_bias    weight          wegiht_router                NOTE
-    # 2026-08-17_12-04-15   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32, 16]        [128, 64]                    Good, but not 'significantly better'
-    #                                                                                                                      But be clear, at least 'for now', no worse task than PPO
+    # 2026-08-17_12-04-15   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32, 16]        [128, 64]                    Stack makes learning slow as task num grows
+    # 2026-08-17_21-19-27   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [256, 128]                   Overall good, SUCCESS
+
+    # Ongoing
+    # 2026-08-17_           # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [128]
 
     # Will be tested
-    # 2026-08-17_           # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [256, 128]
+
 
     # kae_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
     kae_path: str = "/home/joonwon/github/less_leg_walking_1.worktrees/origin-master/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/ForMOE_p1_pad256_obv16.pth"
