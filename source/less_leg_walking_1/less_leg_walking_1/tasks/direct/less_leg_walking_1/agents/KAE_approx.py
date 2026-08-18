@@ -302,7 +302,7 @@ def train_and_save_kae(
     hidden_dim=256,
     sample_count=15000,
     batch_size=2048,
-    num_epochs=20000,
+    num_epochs=7500,#20000,
     learning_rate=1e-4,
     kae_coefficient=0.1,
     action_coefficient=0.9,

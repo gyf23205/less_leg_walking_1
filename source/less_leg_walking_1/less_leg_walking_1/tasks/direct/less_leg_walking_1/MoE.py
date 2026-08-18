@@ -27,9 +27,7 @@ class MoECfg(RslRlPpoActorCriticCfg):
                             #  res             g          g_bias    w_bias    weight          wegiht_router                NOTE
     # 2026-08-17_12-04-15   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32, 16]        [128, 64]                    Stack makes learning slow as task num grows
     # 2026-08-17_21-19-27   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [256, 128]                   Overall good, SUCCESS
-
-    # Ongoing
-    # 2026-08-17_           # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [128]
+    # 2026-08-17_           # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [128]                        SUCCESS, Base ver
 
     # Will be tested
 
@@ -258,43 +256,7 @@ class MoEActorCritic(ActorCritic):
             input_dim = h
         mlp_layers.append(nn.Linear(input_dim, self.act_dim))
         self.mlp_network = nn.Sequential(*mlp_layers)
-        
-        # # 2. Expert Weight Network (learns how to use KAE experts)
-        # expert_weight_layers = []
-        # input_dim = self.num_actor_obs
-        # for h in self.weight_hidden_dims:
-        #     expert_weight_layers.append(nn.Linear(input_dim, h))
-        #     expert_weight_layers.append(nn.ELU())
-        #     input_dim = h
-        # # expert_weight_layers.append(nn.Linear(input_dim, self.observable_dim))
-        # # self.expert_weight_network = nn.Sequential(*expert_weight_layers)
-        
-        # # # Initialize expert weights with bias toward 1.0
-        # # with torch.no_grad():
-        # #     final_layer = self.expert_weight_network[-1]
-        # #     final_layer.weight.data.fill_(0.0)
-        # #     final_layer.bias.data = torch.ones(self.observable_dim)
-
-        # if self.crl_mode:
-        #     expert_output_dim = (self.total_modes)
-        # else:
-        #     expert_output_dim = (
-        #         self.observable_dim
-        #     )
-
-        # expert_weight_layers.append(
-        #     nn.Linear(
-        #         input_dim,
-        #         expert_output_dim,
-        #     )
-        # )
-        # self._temporal_input_dim = input_dim
-
-
-        # self.expert_weight_network = nn.Sequential(
-        #     *expert_weight_layers
-        # )
-
+   
         # 2. Expert weight networks: one independent trunk per KAE.
         #    weight_hidden_dims is now the size of a SINGLE task's network, so the
         #    hidden width never has to cover the accumulated mode count.
@@ -344,12 +306,7 @@ class MoEActorCritic(ActorCritic):
         self.g_min = 0.0 # <- this is g_min
         self.g_max = 1.0 # <- this is g_max
 
-        # KAE-level router. It allocates the unit L1 budget BETWEEN KAEs, while each
-        # expert_weight_network (L1-normalised inside its own modes) only decides
-        # WHICH modes within that KAE. Because the router is a softmax the total
-        # budget stays 1, so the KMD branch magnitude is independent of the number
-        # of stacked KAEs. With a single branch this reduces exactly to the previous
-        # global-L1 behaviour.
+        # KAE-level router. It allocates the unit L1 budget BETWEEN KAEs
         router_layers = []
         router_input_dim = self.num_actor_obs
         for hidden_dim in self.weight_router_hidden_dims:
@@ -462,32 +419,7 @@ class MoEActorCritic(ActorCritic):
 
             expert_mode_count = (self.total_modes)
 
-        # 1st
-        # # # expert_weights = (self.expert_weight_network(obs))
-        # # expert_weights = torch.cat(
-        # #     [net(obs) for net in self.expert_weight_networks],
-        # #     dim=1,
-        # # )
-
-        # # kae_actions = torch.sum(expert_weights.view(-1,expert_mode_count,1,)* experts_outputs,dim=1,)       
-
-        # 2nd
-        # # Route, don't scale: L1-normalise the mode weights across ALL KAEs so the
-        # # KMD branch magnitude is set by the modes themselves, not by w. This makes
-        # # the two branches commensurate before the gate mixes them.
-        # expert_weights = torch.cat(
-        #     [net(obs) for net in self.expert_weight_networks],
-        #     dim=1,
-        # )
-        # expert_weights = expert_weights / (
-        #     expert_weights.abs().sum(dim=1, keepdim=True) + 1e-6
-        # )
-
-        # Two-level routing. The softmax router decides HOW MUCH budget each KAE
-        # gets; each expert_weight_network, L1-normalised inside its own modes,
-        # decides WHICH modes within that KAE. Total budget is still exactly 1, so
-        # the KMD branch stays commensurate with res and independent of N. This
-        # splits the reallocation problem from 16*N weights down to N logits.
+        # Two-level routing. 
         kae_router = torch.softmax(self.kae_router_network(obs), dim=1)
         branch_weights = []
         for branch_index, weight_net in enumerate(self.expert_weight_networks):
@@ -524,35 +456,16 @@ class MoEActorCritic(ActorCritic):
 
         gate_log = gate.detach()
 
-        # Only the first ~100 iterations are needed, and .item() forces a GPU sync
-        # on the rollout path, so stop logging once we have enough.
-        if not torch.is_grad_enabled():
-            self._fwd += 1
-            _g_std = gate_log.std().item() if gate_log.numel() > 1 else 0.0
-            _kae_norm = kae_actions.norm(dim=-1).mean().item()
-            _res_norm = mlp_actions.norm(dim=-1).mean().item()
-            self._f.write(
-                f"{self._fwd},{gate_log.mean().item()},{_g_std},"
-                f"{_kae_norm},{_res_norm},{_kae_norm / max(_res_norm, 1e-12)}\n"
-            )
-
-        # # --- gate / branch magnitude log -------------------------------------------
-        # # Goes into the CRL session folder so concurrent trials never collide.
-        # # Columns:
-        # #   fwd       forward-pass counter during rollout (24 per PPO iteration)
-        # #   g_mean    batch mean of the gate output  g = sigmoid(gate(obs))
-        # #   g_std     batch std of g; 0 when the batch holds a single element
-        # #   kae_norm  batch mean of ||w . KMD||   (the g-weighted branch, before g)
-        # #   res_norm  batch mean of ||res(obs)||  (the residual branch, before 1-g)
-        # #   ratio     kae_norm / res_norm
-        # _log_dir = Path(os.environ.get("CRL_KAE_LOG_DIRECTORY", "logs/moe_gate"))
-        # _log_dir.mkdir(parents=True, exist_ok=True)
-        # _task = os.environ.get("CRL_TASK_NAME", "standalone")
-        # _index = os.environ.get("CRL_TASK_INDEX", "0")
-        # self._f = (_log_dir / f"{_index}_{_task}_gate.csv").open("w", buffering=1)
-        # self._f.write("fwd,g_mean,g_std,kae_norm,res_norm,ratio\n")
-        # self._fwd = 0
-
+        # # Logger
+        # if not torch.is_grad_enabled():
+        #     self._fwd += 1
+        #     _g_std = gate_log.std().item() if gate_log.numel() > 1 else 0.0
+        #     _kae_norm = kae_actions.norm(dim=-1).mean().item()
+        #     _res_norm = mlp_actions.norm(dim=-1).mean().item()
+        #     self._f.write(
+        #         f"{self._fwd},{gate_log.mean().item()},{_g_std},"
+        #         f"{_kae_norm},{_res_norm},{_kae_norm / max(_res_norm, 1e-12)}\n"
+        #     )
 
         return actions
             
