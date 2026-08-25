@@ -118,6 +118,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
 
+    # Tag the run directory with the CRL session so concurrent trials stay distinguishable.
+    _crl_session = os.environ.get("CRL_SESSION_ID")
+    if _crl_session:
+        agent_cfg.run_name = (
+            f"{agent_cfg.run_name}_{_crl_session}" if getattr(agent_cfg, "run_name", "") else _crl_session
+        )
+
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -143,7 +150,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs: put each task's KAE-MoE run under its task folder
-    log_dir = "KAE_MoE"
+    # log_dir = "KAE_MoE"
+    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:
@@ -162,7 +170,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    
+
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
@@ -211,6 +219,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+
+    env.unwrapped._policy_ref = getattr(runner.alg, "policy", None) or runner.alg.actor_critic
 
     # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
     cli_args.patch_tensorboard_gradient_steps(runner)
