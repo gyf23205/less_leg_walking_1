@@ -8,8 +8,11 @@ import os
 import yaml
 
 from isaaclab.utils import configclass
-
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+
+
+# mode = "scratch"  # Choose from "scratch", "residual", "MoE", or "component"
+mode = "MoE"  # Choose from "scratch", "residual", "MoE", or "component"
 
 # ############################################
 # ALGO_METHOD is the single switch that selects the method for every runner config
@@ -65,7 +68,6 @@ def load_algorithm_cfg(terrain: str, method: str = ALGO_METHOD) -> RslRlPpoAlgor
     return RslRlPpoAlgorithmCfg(**params)
 # ############################################
 
-
 @configclass
 class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
@@ -83,7 +85,13 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
-    experiment_name = "less_leg_walking_rough"
+    # experiment_name = "less_leg_walking_rough"
+    experiment_name = {
+            "scratch": "less_leg_walking_rough",
+            "MoE": "MoE16_less_leg_walking_rough",
+            "residual": "Residual_less_leg_walking_rough",
+            "component": "Component_less_leg_walking_rough"
+        }[mode]
     max_iterations = 2500
 
     algorithm = load_algorithm_cfg("rough")
@@ -91,7 +99,7 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
 @configclass
 class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 2500  # Increased for more training
+    max_iterations = 4000 #2500  # Increased for more training
     save_interval = 200
     experiment_name = "anymal_c_flat_leg_walking"
     empirical_normalization = False
@@ -111,9 +119,15 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
 
 @configclass
 class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    experiment_name = "anymal_c_jump_flat"
+    # experiment_name = "anymal_c_jump_flat"
+    experiment_name = {
+            "scratch": "anymal_c_jump_flat",
+            "MoE": "MoE16_anymal_c_jump_flat",
+            "residual": "Residual_anymal_c_jump_flat",
+            "component": "Component_anymal_c_jump_flat"
+        }[mode]
     num_steps_per_env = 24
-    max_iterations =4000  # Increased for more training
+    max_iterations = 2500 # 4000  # Increased for more training
     save_interval = 200
     empirical_normalization = False
 

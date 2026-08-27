@@ -73,3 +73,8 @@ tests/
 # Models
 **/*.pth
 **/*.pt
+
+# Log
+source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/sessions/**/crl_state.json
+source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/sessions/**/*csv
+source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/sessions/**/*json

@@ -1,6 +1,10 @@
 from pathlib import Path
+import csv
+import json
+import os
 import random
 import sys
+import time
 import types
 
 import numpy as np
@@ -296,17 +300,18 @@ def train_and_save_kae(
     observable_dim=16,
     padded_dimension=256,
     hidden_dim=256,
-    sample_count=10000,
+    sample_count=15000,
     batch_size=2048,
-    num_epochs=500,
-    learning_rate=1e-3,
+    num_epochs=7500,#20000,
+    learning_rate=1e-4,
     kae_coefficient=0.1,
     action_coefficient=0.9,
     c1=1.0,
     c2=1.0,
     c3=1.0,
     p=1,
-    seed=10,
+    seed=777,
+    log_directory=None,
 ):
     device = torch.device(device)
     observation_file = Path(observation_file)
@@ -319,7 +324,16 @@ def train_and_save_kae(
     if batch_size % p != 0:
         raise ValueError(f"batch_size must be divisible by p: batch_size={batch_size}, p={p}.")
 
+    # kae_directory.mkdir(parents=True, exist_ok=True)
+    # _set_deterministic_seed(seed)
+
     kae_directory.mkdir(parents=True, exist_ok=True)
+    if log_directory is None:
+        log_directory = os.environ.get("CRL_KAE_LOG_DIRECTORY") or (kae_directory / "kae_logs")
+    log_directory = Path(log_directory)
+    log_directory.mkdir(parents=True, exist_ok=True)
+    history_file = log_directory / f"{task_name}_kae_history.csv"
+    summary_file = log_directory / f"{task_name}_kae_summary.json"
     _set_deterministic_seed(seed)
 
     observations = torch.load(observation_file, map_location="cpu", weights_only=False)
@@ -358,8 +372,20 @@ def train_and_save_kae(
         device=device,
     ).to(device)
     optimizer = torch.optim.Adam(kae.parameters(), lr=learning_rate)
-    kae.train()
 
+    # kae.train()
+    # import time
+    # start = time.perf_counter()
+    # for epoch in range(num_epochs):
+
+    kae.train()
+    start = time.perf_counter()
+    history_handle = history_file.open("w", newline="", encoding="utf-8")
+    history_writer = csv.writer(history_handle)
+    history_writer.writerow(
+        ["epoch", "loss", "loss_kae", "action", "recon", "state", "latent",
+        "elapsed_s"]
+    )
     for epoch in range(num_epochs):
         running_loss = 0.0
         running_kae_loss = 0.0
@@ -413,8 +439,33 @@ def train_and_save_kae(
                     f"Koopman operator contains NaN or Inf at epoch {epoch + 1}, batch {inner + 1}."
                 )
 
+        # num_batches = len(train_loader)
+        # if epoch == 0 or (epoch + 1) % 100 == 0:
+        #     print(
+        #         f"[KAE] {task_name} epoch {epoch + 1}/{num_epochs} "
+        #         f"loss={running_loss / num_batches:.6f} "
+        #         f"loss_kae={running_kae_loss / num_batches:.6f} "
+        #         f"action={running_action_loss / num_batches:.6f} "
+        #         f"recon={running_recon_loss / num_batches:.6f} "
+        #         f"state={running_state_loss / num_batches:.6f} "
+        #         f"latent={running_latent_loss / num_batches:.6f}"
+        #     )
+
         num_batches = len(train_loader)
+        with torch.no_grad():
+            spectral_radius = torch.linalg.eigvals(kae.K).abs().max().item()
+        history_writer.writerow([
+            epoch + 1,
+            running_loss / num_batches,
+            running_kae_loss / num_batches,
+            running_action_loss / num_batches,
+            running_recon_loss / num_batches,
+            running_state_loss / num_batches,
+            running_latent_loss / num_batches,
+            time.perf_counter() - start,
+        ])
         if epoch == 0 or (epoch + 1) % 100 == 0:
+            history_handle.flush()
             print(
                 f"[KAE] {task_name} epoch {epoch + 1}/{num_epochs} "
                 f"loss={running_loss / num_batches:.6f} "
@@ -422,15 +473,63 @@ def train_and_save_kae(
                 f"action={running_action_loss / num_batches:.6f} "
                 f"recon={running_recon_loss / num_batches:.6f} "
                 f"state={running_state_loss / num_batches:.6f} "
-                f"latent={running_latent_loss / num_batches:.6f}"
+                f"latent={running_latent_loss / num_batches:.6f} "
             )
 
+    history_handle.close()
     kae.eval()
+
+    # Evaluate reconstruction on the real rollout observations, not on the sampled
+    # training data, so the number reflects states the policy actually visits.
+    with torch.no_grad():
+        eval_count = min(4096, observations.shape[0])
+        real = observations[:eval_count].to(device)
+        real_pad = torch.ones(eval_count, padded_dimension - obs_dim, device=device)
+        real_aug = torch.cat([real, real_pad], dim=1)
+        real_hat, _, _ = kae(real_aug)
+        recon_mse = nn.MSELoss()(real_hat, real_aug).item()
+        recon_rel = (torch.norm(real_hat - real_aug) / torch.norm(real_aug)).item()
+        eigenvalues = torch.linalg.eigvals(kae.K)
+
+    elapsed = time.perf_counter() - start
+    summary = {
+        "task_name": task_name,
+        "session_id": os.environ.get("CRL_SESSION_ID"),
+        "task_index": os.environ.get("CRL_TASK_INDEX"),
+        "observation_file": str(observation_file),
+        "num_epochs": num_epochs,
+        "sample_count": sample_count,
+        "batch_size": batch_size,
+        "observable_dim": observable_dim,
+        "padded_dimension": padded_dimension,
+        "hidden_dim": hidden_dim,
+        "obs_dim": int(obs_dim),
+        "action_dim": int(action_dim),
+        "learning_rate": learning_rate,
+        "seed": seed,
+        "final_loss": running_loss / num_batches,
+        "final_loss_kae": running_kae_loss / num_batches,
+        "final_action_loss": running_action_loss / num_batches,
+        "final_recon_loss": running_recon_loss / num_batches,
+        "final_state_loss": running_state_loss / num_batches,
+        "final_latent_loss": running_latent_loss / num_batches,
+        "eval_recon_mse_real_obs": recon_mse,
+        "eval_recon_relative_error": recon_rel,
+        "elapsed_seconds": elapsed,
+    }
+
     kae = kae.cpu()
     kae.K = kae.K.detach().cpu()
     _install_legacy_autoencoder_module()
-
     output_file = kae_directory / f"{task_name}_KAE.pth"
     torch.save(kae, output_file)
-    print(f"[KAE] Saved: {output_file}")
+    summary["kae_file"] = str(output_file)
+    with summary_file.open("w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, ensure_ascii=False)
+
+    print(f"[KAE] Saved   : {output_file}")
+    print(f"[KAE] History : {history_file}")
+    print(f"[KAE] Summary : {summary_file}")
+    print(f"[KAE] eval  recon_rel={recon_rel:.4f}  rho(K)={spectral_radius:.4f}")
+    print(f"Elapsed time for training KAE: {elapsed:.4f} seconds")
     return output_file
