@@ -1,0 +1,46 @@
+# PPO algorithm hyperparameters for the CompoNet / component method.
+# Loaded by rsl_rl_ppo_cfg.py when ALGO_METHOD == "compo".
+# Seeded from the nominal defaults - tune per terrain for CompoNet as needed.
+# One block per terrain; each config class picks its terrain (flat / rough / jump).
+
+flat:
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.02
+  num_learning_epochs: 8
+  num_mini_batches: 4
+  learning_rate: 0.0003
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+
+rough:
+  value_loss_coef: 0.7
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.007
+  num_learning_epochs: 10
+  num_mini_batches: 5
+  learning_rate: 0.0002
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 2.0
+
+jump:
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.008
+  num_learning_epochs: 8
+  num_mini_batches: 4
+  learning_rate: 0.0002
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0

@@ -150,7 +150,7 @@ class ObservationLogger:
 
 def get_run_directories():
     run_directories = set()
-    for model_file in Path("logs/rsl_rl").rglob(
+    for model_file in Path("logs/task1").rglob(
         "complete_model_with_metadata.pth"
     ):
         run_directories.add(model_file.parent)

@@ -1,0 +1,102 @@
+# =============================================================================
+# W&B sweep: CompoNet — PPO LEARNING parameters
+# Task: Less-Leg-Flat-Walking-Direct-v1, CRL setting (2 accumulated prevs).
+# =============================================================================
+#
+# Goal: find why CompoNet learns on some CRL tasks but not others, by tuning the
+# PPO learning knobs only. The policy STRUCTURE is left at its original default
+# (attention dim 512, tapering [512,256,128] internal policy, ELU, head init 0.01)
+# — no code changes; only `agent.algorithm.*` (+ init_noise_std exploration) vary.
+#
+# The two levers most likely to matter here are the trust region and exploration:
+# CompoNet starts at the attention-weighted combo of the frozen previous policies,
+# and on a dissimilar task a tight KL / low entropy pins it near that (wrong) prior.
+# Loosening desired_kl and raising entropy_coef are the cheapest ways to escape it.
+#
+# ---------------------------------------------------------------------------
+# !!! REQUIRED before running: the task must use the CompoNet policy. !!!
+#   In agents/rsl_rl_ppo_cfg.py set  ALGO_METHOD = "compo"  (currently "res").
+#   Otherwise every trial trains whatever ALGO_METHOD selects and silently ignores
+#   the overrides below.
+# ---------------------------------------------------------------------------
+#
+# Previous-stage chain (CRL order, from train_componet_CRL.py):
+#   step0 Jump          -> logs/task1/anymal_c_jump_flat/componet/...
+#   step1 Rough-Walking -> logs/task1/anymal_c_rough_leg_walking/componet/...
+#   step2 Leg-Flat-Walk <-- THIS sweep (prevs = step0, step1)
+# The two --prevs_dir paths below are IDENTICAL across all trials, so only the
+# learning knobs vary.
+#
+#   WARNING: these point at the LIVE logs dir. A future `train_componet_CRL.py`
+#   run would overwrite them mid-sweep. Freeze them first (like the residual sweep):
+#     mkdir -p frozen_bases/compo_legflat
+#     cp logs/task1/anymal_c_jump_flat/componet/complete_model_with_metadata.pth        frozen_bases/compo_legflat/prev0_jump.pth
+#     cp logs/task1/anymal_c_rough_leg_walking/componet/complete_model_with_metadata.pth frozen_bases/compo_legflat/prev1_rough.pth
+#   and repoint the two --prevs_dir entries at the frozen copies.
+#
+#   To sweep a DIFFERENT failing task, change --task and the --prevs_dir list to
+#   that task's accumulated chain (its full prefix, in order).
+#
+# How to run (from the REPOSITORY ROOT so logs/ and prev paths resolve):
+#   wandb sweep scripts/wandb_sweep/componet_arch_learning.yaml
+#   wandb agent <entity>/<project>/<sweep_id>
+#
+# Notes:
+#   * `${args_no_hyphens}` expands each swept parameter as a Hydra override
+#     (e.g. agent.algorithm.desired_kl=0.05), applied by train_componet.py's
+#     @hydra_task_config decorator.
+#   * Objective Train/mean_reward is what rsl_rl's OnPolicyRunner logs each
+#     iteration; with a single task this is the final-task reward.
+#   * bayes + hyperband: ~40-60 trials is a reasonable budget. Trials are cut
+#     early if Train/mean_reward stalls. Each trial spins up Isaac Sim (~mins).
+#   * --max_iterations=1200 keeps trials cheap; raise for the final confirmation.
+# =============================================================================
+
+program: scripts/rsl_rl/train_componet.py
+method: bayes
+
+# Total runs for the whole sweep (bayes runs forever otherwise). Global ceiling
+# regardless of how many `wandb agent` processes you launch.
+run_cap: 50
+
+metric:
+  name: Train/mean_reward
+  goal: maximize
+
+early_terminate:
+  type: hyperband
+  min_iter: 300
+  eta: 3
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --task=Less-Leg-Flat-Walking-Direct-v1
+  - --headless
+  - --prevs_dir
+  - /home/yifan/git/less_leg_walking_1/logs/task1/anymal_c_jump_flat/componet/complete_model_with_metadata.pth
+  - /home/yifan/git/less_leg_walking_1/logs/task1/anymal_c_rough_leg_walking/componet/complete_model_with_metadata.pth
+  - --max_iterations=1200
+  - --logger=wandb
+  - --log_project_name=componet-learning-sweep
+  - ${args_no_hyphens}
+
+parameters:
+  # ---- PPO learning parameters (agent.algorithm.*) ----
+  agent.algorithm.learning_rate:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.0005
+  agent.algorithm.entropy_coef:
+    distribution: uniform
+    min: 0.0
+    max: 0.02
+  agent.algorithm.desired_kl:
+    values: [0.01, 0.05, 0.1]
+  agent.algorithm.clip_param:
+    values: [0.1, 0.2, 0.3]
+  # NOTE: whole-number FLOAT fields (e.g. max_grad_norm 1.0/2.0) can't be swept via
+  # this path — wandb serializes 2.0 as `2`, Hydra parses it as int, and Isaac Lab's
+  # from_dict rejects int for a float field. Only sweep floats that keep a fractional
+  # part (above) and ints that match int fields (num_* below).

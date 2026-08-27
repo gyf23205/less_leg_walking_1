@@ -12,7 +12,7 @@ class ResCfg(RslRlPpoActorCriticCfg):
     device: str = "cuda"
     activation: str = "elu"
     class_name: str = "ResActorCritic"
-    actor_hidden_dims: list[int] = [512, 256, 128]
+    actor_hidden_dims: list[int] = [1024, 512, 256]
     critic_hidden_dims: list[int] = [512, 256, 128]
     actor_obs_normalization: bool = False
     critic_obs_normalization: bool = False

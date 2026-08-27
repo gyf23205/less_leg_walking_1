@@ -206,15 +206,30 @@ class DoubleQCritic(nn.Module):
 # ---------------------------------------------------------------------------
 
 class PPOActor(nn.Module):
-    """Gaussian actor for PPO (no tanh squash).
+    """Tanh-squashed diagonal-Gaussian actor for FAME's fast/meta learner.
 
-    Architecture: MLP trunk → mean; separate state-independent ``log_std``
-    parameter (matches standard IsaacLab PPO baselines).
+    Faithful mirror of the original FAME ``DiagGaussianActor``
+    (``FAME/Metaworld/agent/actor.py``): a single MLP trunk outputs
+    ``2 * action_dim`` = ``(mu, log_std)`` with **state-dependent** ``log_std``
+    smoothly bounded into ``[LOG_STD_MIN, LOG_STD_MAX]`` via a scaled ``tanh``
+    (not a free ``nn.Parameter`` + hard ``clamp``), and the action is
+    ``tanh``-squashed through ``SquashedNormal`` so raw actions are bounded to
+    (-1, 1) and cannot explode.
 
-    ``forward(obs)`` → ``torch.distributions.Normal``
-    ``evaluate(obs, actions)`` → ``(log_probs, entropy)``  (for PPO update)
-    ``get_dist_params(obs)`` → ``(mu, std)``  (for meta WD distillation)
+    ``forward(obs)`` → ``SquashedNormal`` distribution over actions ∈ (-1, 1)
+    ``evaluate(obs, actions)`` → ``(log_probs, entropy_proxy)`` for the PPO update.
+        The squashed distribution has no closed-form entropy, so the entropy
+        proxy is ``-log_prob`` (as in SAC); exploration is regulated by the
+        agent's auto-tuned temperature, not a fixed bonus.
+    ``get_dist_params(obs)`` → ``(mu, std)`` of the **pre-squash** Normal, used
+        for the meta Wasserstein-distillation loss.
+
+    The class name is kept as ``PPOActor`` so existing imports stay valid; note
+    the architecture is now squashed (state-dependent log_std, 2*action_dim head).
     """
+
+    # small epsilon to keep atanh(action) finite for stored boundary actions
+    _ACT_EPS = 1e-6
 
     def __init__(
         self,
@@ -222,36 +237,47 @@ class PPOActor(nn.Module):
         action_dim: int,
         hidden_dims: list[int] = (512, 256, 128),
         activation: str = "elu",
-        init_log_std: float = 0.0,
+        log_std_bounds: tuple[float, float] = (LOG_STD_MIN, LOG_STD_MAX),
     ):
         super().__init__()
-        self.trunk = _make_mlp(obs_dim, list(hidden_dims), action_dim, activation)
-        # State-independent log_std (one per action dimension)
-        self.log_std = nn.Parameter(torch.full((action_dim,), init_log_std))
+        self.log_std_bounds = log_std_bounds
+        # trunk outputs 2 * action_dim: first half = mu, second = log_std
+        self.trunk = _make_mlp(obs_dim, list(hidden_dims), 2 * action_dim, activation)
         self.apply(_weight_init)
-        # Re-init log_std after _weight_init so it keeps the specified value
-        nn.init.constant_(self.log_std, init_log_std)
 
-    def forward(self, obs: torch.Tensor) -> torch.distributions.Normal:
-        """Return an un-squashed Normal distribution."""
-        mu  = self.trunk(obs)
-        std = self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX).exp().expand_as(mu)
-        return torch.distributions.Normal(mu, std)
+    def _mu_std(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        mu, log_std = self.trunk(obs).chunk(2, dim=-1)
+        # constrain log_std inside [log_std_min, log_std_max] via scaled tanh
+        log_std = torch.tanh(log_std)
+        log_std_min, log_std_max = self.log_std_bounds
+        log_std = log_std_min + 0.5 * (log_std_max - log_std_min) * (log_std + 1.0)
+        std = log_std.exp()
+        return mu, std
+
+    def forward(self, obs: torch.Tensor) -> SquashedNormal:
+        """Return a tanh-squashed Normal distribution over actions ∈ (-1, 1)."""
+        mu, std = self._mu_std(obs)
+        return SquashedNormal(mu, std)
 
     def evaluate(
         self, obs: torch.Tensor, actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Log-prob and entropy for PPO surrogate objective."""
+        """Log-prob (with tanh Jacobian) and entropy proxy for PPO.
+
+        ``actions`` are the squashed actions previously sent to the env; they
+        are clamped just inside (-1, 1) so the internal ``atanh`` stays finite.
+        """
         dist     = self.forward(obs)
+        eps      = self._ACT_EPS
+        actions  = actions.clamp(-1.0 + eps, 1.0 - eps)
         log_prob = dist.log_prob(actions).sum(-1, keepdim=True)  # (B,1)
-        entropy  = dist.entropy().sum(-1, keepdim=True)          # (B,1)
+        # No closed-form entropy for the squashed dist; use -log_prob as proxy.
+        entropy  = -log_prob
         return log_prob, entropy
 
     def get_dist_params(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return ``(mu, std)`` for meta WD distillation."""
-        mu  = self.trunk(obs)
-        std = self.log_std.clamp(LOG_STD_MIN, LOG_STD_MAX).exp().expand_as(mu)
-        return mu, std
+        """Return ``(mu, std)`` of the pre-squash Normal for meta WD distillation."""
+        return self._mu_std(obs)
 
 
 class PPOCritic(nn.Module):

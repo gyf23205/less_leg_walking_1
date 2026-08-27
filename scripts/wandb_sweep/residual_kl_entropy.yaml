@@ -1,0 +1,71 @@
+# =============================================================================
+# W&B sweep: residual-policy PPO — tune desired_kl and entropy_coef
+# Task: Less-AnymalC-Jump-Direct-v1, in the CRL setting (accumulated base).
+# =============================================================================
+#
+# Why these two knobs:
+#   The residual starts at `action = base` (zero-init residual) and the adaptive
+#   trust region (schedule: adaptive, desired_kl=0.01) shrinks the LR whenever an
+#   update moves away from the base. When the accumulated base is a poor prior for
+#   this task, that pins the policy near a wrong base and it plateaus far below a
+#   from-scratch PPO. Loosening the KL trust region and raising entropy are the two
+#   cheapest levers for letting the residual escape the base — swept here first.
+#
+# Base policy (CRL accumulation):
+#   This is the CRL setting: the base is the *accumulated* composed policy the CRL
+#   chain had reached right before the Less-Leg-Flat-Walking task — i.e. the frozen
+#   flat-walking policy + Jump residual + Rough-Walking residual (2 accumulated
+#   levels). It is passed via `--original_policy_path` and is IDENTICAL across all
+#   trials, so only desired_kl / entropy_coef vary.
+#
+#   The base was frozen (copied out of the live logs dir) so a future CRL run can't
+#   overwrite it mid-sweep. Source of truth was:
+#     logs/task1/anymal_c_rough_leg_walking/residual/complete_model_with_metadata.pth
+#   (To sweep Less-Leg-Rough-Walking instead — the last CRL task — use the 4-level
+#    base logs/task1/anymal_c_jump_rough/residual/complete_model_with_metadata.pth
+#    and change --task below.)
+#
+# !!! REQUIRED before running: the task must use the RESIDUAL policy. !!!
+#   In agents/rsl_rl_ppo_cfg.py, LessLegWalkingFlatPPORunnerCfg currently has
+#   `policy = MoECfg()` active and `policy = ResCfg()` commented out. Switch it to
+#   `policy = ResCfg()` (comment MoECfg), otherwise this sweep trains an MoE policy
+#   and silently ignores the residual base. (Ask me to instead add a dedicated
+#   `rsl_rl_res_cfg_entry_point` + `--agent` flag so no comment-toggling is needed.)
+#
+# How to run (from the REPOSITORY ROOT so logs/ and the base path resolve):
+#   wandb sweep scripts/wandb_sweep/residual_kl_entropy.yaml
+#   wandb agent <entity>/<project>/<sweep_id>
+#
+# Notes:
+#   * `${args_no_hyphens}` expands each swept parameter as `key=value`, i.e. a Hydra
+#     override (agent.algorithm.desired_kl=0.02) that train_res.py applies via its
+#     @hydra_task_config decorator.
+#   * Objective `Train/mean_reward` is what rsl_rl's OnPolicyRunner logs to wandb
+#     each iteration; with a single task this is exactly the final-task reward.
+#   * 4 x 3 = 12 runs at the task-default budget (~2500 iters). Add
+#     `--max_iterations=1500` to the command list to make the sweep cheaper.
+# =============================================================================
+
+program: scripts/rsl_rl/train_res.py
+method: grid
+
+metric:
+  name: Train/mean_reward
+  goal: maximize
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --task=Less-AnymalC-Jump-Direct-v1
+  - --headless
+  - --original_policy_path=/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth
+  - --logger=wandb
+  - --log_project_name=residual-kl-entropy-sweep
+  - ${args_no_hyphens}
+
+parameters:
+  agent.algorithm.desired_kl:
+    values: [0.08, 0.1, 0.12]
+  agent.algorithm.entropy_coef:
+    values: [0.04, 0.05, 0.06]

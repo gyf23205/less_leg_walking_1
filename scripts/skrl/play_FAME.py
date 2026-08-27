@@ -9,13 +9,13 @@ Usage examples
 # Visualise in the simulator (interactive):
 python scripts/skrl/play_FAME.py \
     --task Less-AnymalC-Rough-Walking-Direct-v1 \
-    --checkpoint logs/skrl/FAME/<run_dir>/checkpoint_final \
+    --checkpoint logs/task1/<experiment_name>/FAME/<run_dir>/checkpoint_final \
     --num_envs 16
 
 # Record a video:
 python scripts/skrl/play_FAME.py \
     --task Less-AnymalC-Rough-Walking-Direct-v1 \
-    --checkpoint logs/skrl/FAME/<run_dir>/checkpoint_final \
+    --checkpoint logs/task1/<experiment_name>/FAME/<run_dir>/checkpoint_final \
     --num_envs 1 \
     --video --video_length 500
 """
@@ -93,9 +93,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     except AttributeError:
         dt = env.unwrapped.step_dt
 
+    # Resolve this task's rsl_rl experiment_name so the log path mirrors training:
+    # logs/task1/<experiment_name>/FAME.
+    from isaaclab_tasks.utils import load_cfg_from_registry
+    try:
+        _rsl_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
+        experiment_name = getattr(_rsl_cfg, "experiment_name", None) or args_cli.task
+    except Exception:
+        experiment_name = args_cli.task
+
     if args_cli.video:
         video_kwargs = {
-            "video_folder": os.path.join("logs", "skrl", "FAME", "play_videos"),
+            "video_folder": os.path.join("logs", "task1", experiment_name, "FAME", "play_videos"),
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
@@ -144,9 +153,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     if args_cli.checkpoint:
         resume_path = os.path.abspath(args_cli.checkpoint)
     else:
-        # Auto-find the latest checkpoint in logs/skrl/FAME/
+        # Auto-find the latest checkpoint in logs/task1/<experiment_name>/FAME/
         from isaaclab_tasks.utils import get_checkpoint_path
-        log_root = os.path.abspath(os.path.join("logs", "skrl", "FAME"))
+        log_root = os.path.abspath(os.path.join("logs", "task1", experiment_name, "FAME"))
         resume_path = get_checkpoint_path(log_root, other_dirs=["checkpoints"])
 
     print(f"[INFO] Loading FAME checkpoint: {resume_path}")
@@ -164,7 +173,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         t_start = time.time()
 
         with torch.inference_mode():
-            # Use deterministic mean action for evaluation (PPOActor: Normal → unbounded mu)
+            # Deterministic action for evaluation: squashed actor's mean = tanh(mu) ∈ (-1, 1)
             dist    = agent.fast_actor(obs)
             actions = dist.mean
 

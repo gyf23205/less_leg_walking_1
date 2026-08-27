@@ -3,19 +3,21 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Compare the residual and scratch training methods by reading their tensorboard logs
-and printing the converged Train/mean_reward for each task.
+"""Compare the training methods by reading their tensorboard logs and printing the
+converged Train/mean_reward for each task.
 
 No Isaac Sim / simulation startup required - this only reads existing tensorboard logs.
+
+Layout: logs/task1/<experiment_name>/<method>. FAME logs the same ``Train/mean_reward``
+tag as the rsl_rl methods, so all five methods are directly comparable per task.
 """
 
 import argparse
 import os
-import re
 
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "rsl_rl")
+LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "task1")
 
 TASK_TO_EXPERIMENT = {
     "Less-AnymalC-Flat-Walking-Direct-v1": "anymal_c_flat_leg_walking",
@@ -26,22 +28,17 @@ TASK_TO_EXPERIMENT = {
     "Less-Leg-Rough-Walking-Direct-v1": "less_leg_walking_rough",
 }
 
+# Method -> log subfolder under logs/task1/<experiment_name>/.
+METHODS = {
+    "scratch": "scratch",
+    "residual": "residual",
+    "componet": "componet",
+    "KAE_MoE": "KAE_MoE",
+    "FAME": "FAME",
+}
+
 METRIC = "Train/mean_reward"
 MIN_POINTS = 50
-
-TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
-
-
-def find_scratch_dir(experiment_dir: str) -> str | None:
-    if not os.path.isdir(experiment_dir):
-        return None
-    literal_scratch = os.path.join(experiment_dir, "scratch")
-    if os.path.isdir(literal_scratch):
-        return literal_scratch
-    candidates = sorted(name for name in os.listdir(experiment_dir) if TIMESTAMP_RE.match(name))
-    if not candidates:
-        return None
-    return os.path.join(experiment_dir, candidates[-1])
 
 
 def converged_reward(run_dir: str | None, window: int) -> tuple[float | None, int]:
@@ -65,38 +62,20 @@ def format_cell(value: float | None, num_points: int) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare converged reward between residual and scratch methods.")
+    parser = argparse.ArgumentParser(description="Compare converged reward across training methods, per task.")
     parser.add_argument("--window", type=int, default=100, help="Number of trailing points to average over.")
     args = parser.parse_args()
 
     rows = []
     for task, experiment in TASK_TO_EXPERIMENT.items():
         experiment_dir = os.path.join(LOG_ROOT, experiment)
-        scratch_dir = find_scratch_dir(experiment_dir)
-        residual_dir = os.path.join(experiment_dir, "residual")
+        cells = [task]
+        for folder in METHODS.values():
+            value, num_points = converged_reward(os.path.join(experiment_dir, folder), args.window)
+            cells.append(format_cell(value, num_points))
+        rows.append(tuple(cells))
 
-        scratch_value, scratch_n = converged_reward(scratch_dir, args.window)
-        residual_value, residual_n = converged_reward(residual_dir, args.window)
-
-        delta = None
-        if (
-            scratch_value is not None
-            and residual_value is not None
-            and scratch_n >= MIN_POINTS
-            and residual_n >= MIN_POINTS
-        ):
-            delta = residual_value - scratch_value
-
-        rows.append(
-            (
-                task,
-                format_cell(scratch_value, scratch_n),
-                format_cell(residual_value, residual_n),
-                f"{delta:+.3f}" if delta is not None else "-",
-            )
-        )
-
-    headers = ("Task", "Scratch (converged)", "Residual (converged)", "Delta (res - scratch)")
+    headers = ("Task", *METHODS.keys())
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
 
     def fmt_row(row):

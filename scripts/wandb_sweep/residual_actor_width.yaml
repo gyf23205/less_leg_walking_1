@@ -1,0 +1,111 @@
+# =============================================================================
+# W&B sweep: residual-policy PPO — tune the WIDTH of the residual actor,
+#            applied uniformly to EVERY task of the CRL chain.
+# =============================================================================
+#
+# What is swept:
+#   Only `agent.policy.actor_hidden_dims`, and every candidate value has EXACTLY
+#   THREE entries. So the number of nodes per hidden layer varies while the DEPTH
+#   of the policy network stays fixed at 3 hidden layers, by construction.
+#
+# One trial = one full CRL chain:
+#   The program is train_res_CRL.py, not train_res.py. The driver forwards every
+#   unknown arg verbatim to each per-task train_res.py call, so the swept
+#   `agent.policy.actor_hidden_dims=...` override applies to EVERY residual in the
+#   chain — the Jump residual and the Less-Leg-Flat-Walking residual are trained
+#   with the same structure within a trial. The chain starts from the fixed
+#   walking_policy_new.pth base (ResCfg default), so no pre-trained checkpoint
+#   needs to exist before launching, and nothing outside the sweep is reused.
+#   Tasks are whatever is uncommented in TRAIN_TASKS in train_res_CRL.py
+#   (currently: Less-AnymalC-Jump -> Less-Leg-Flat-Walking).
+#
+# What is deliberately NOT swept:
+#   * critic_hidden_dims — stays at the ResCfg default [512, 256, 128], so any
+#     difference in reward is attributable to residual-actor capacity alone.
+#   * activation ("elu"), and every PPO hyperparameter: those come from
+#     agents/algo_cfg/res.yaml per terrain (lr, desired_kl 0.1, entropy_coef 0.06),
+#     i.e. the values the kl/entropy sweep already settled on.
+#   * init_noise_std — it CANNOT be overridden for ResCfg: the field is never
+#     assigned in the dataclass, so it stays `dataclasses.MISSING`, to_dict()
+#     renders it as `{}` and from_dict rejects any value for it. ResActorCritic
+#     falls back to 0.8 (res_net.py:59-63).
+#
+# !!! REQUIRED before running !!!
+#   ALGO_METHOD must be "res" in agents/rsl_rl_ppo_cfg.py (it already is). There is
+#   no CLI override for it — it is a module-level constant.
+#
+# How to run (from the REPOSITORY ROOT so logs/ and the base path resolve):
+#   wandb sweep scripts/wandb_sweep/residual_actor_width.yaml
+#   wandb agent <entity>/residual-actor-width-sweep/<sweep_id>
+#
+# Metrics:
+#   The DRIVER owns the wandb run (--wandb); the per-task children are forced to
+#   --logger=tensorboard and their reward curves are replayed into that one run with
+#   a monotonically increasing step offset. So:
+#     * Train/mean_reward       — one continuous curve across the whole chain.
+#     * crl/task<i>_<task>_final_reward — each task's final reward (summary).
+#     * crl/mean_final_reward   — mean of the per-task finals = THE OBJECTIVE.
+#     * crl/final_task_reward   — the last task's final reward.
+#   crl/mean_final_reward is the objective because the point of this sweep is a
+#   structure that works for the whole sequence, not one that only wins the last task.
+#
+# Notes:
+#   * `${args_no_hyphens}` expands each swept parameter as `key=value`, i.e. a
+#     Hydra override that train_res.py applies via @hydra_task_config ->
+#     agent_cfg.from_dict. The agent builds argv as a list for subprocess (no
+#     shell), so no quoting/escaping is involved.
+#   * The shapes are written as QUOTED STRINGS. wandb serializes a value with a
+#     plain f"{param}={value}", so a string emits the bracket literal verbatim
+#     ("[256,128,64]" -> agent.policy.actor_hidden_dims=[256,128,64]) and Hydra
+#     parses that into a real list[int]. Isaac Lab's from_dict accepts a list of
+#     any length for a list field.
+#   * `agent.run_name=${oc.env:WANDB_RUN_ID}` gives every trial its OWN log dir per
+#     task (logs/task1/<experiment_name>/residual_<runid>/) instead of trials
+#     overwriting each other. This is REQUIRED here, not cosmetic: the driver reads
+#     each task's TensorBoard events back out of that dir, and a shared dir would
+#     mix several trials' events into one replay. The wandb agent exports
+#     WANDB_RUN_ID into the child env and Isaac Lab's hydra wrapper resolves the
+#     interpolation (OmegaConf.to_container(..., resolve=True)); wandb's own command
+#     macros are `${envvar:VAR}`-only, so this chunk passes through untouched.
+#     NOTE: running this command by hand outside a wandb agent requires
+#     WANDB_RUN_ID to be set, or oc.env will raise.
+#   * `project:` MUST match --wandb_project, or the driver's run lands in a
+#     different project and the sweep controller never sees the metric.
+#   * No early_terminate: the x-axis is rescaled to cumulative gradient steps
+#     (scripts/common/tb_xaxis.py), so a hyperband min_iter would have to be
+#     expressed in those units (task 1 ends at 1200 * 8 epochs * 4 minibatches =
+#     38400), and pruning on task-1 reward alone would discard architectures that
+#     trade early performance for retention later in the chain — exactly what this
+#     sweep is meant to measure. 6 trials x 2 tasks x 1200 iterations, run in full.
+# =============================================================================
+
+program: scripts/rsl_rl/train_res_CRL.py
+method: grid
+project: residual-actor-width-sweep
+
+metric:
+  name: crl/mean_final_reward
+  goal: maximize
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --headless
+  - --max_iterations=1200
+  - --wandb
+  - --wandb_project=residual-actor-width-sweep
+  - agent.run_name=${oc.env:WANDB_RUN_ID}
+  - ${args_no_hyphens}
+
+parameters:
+  # Exactly 3 hidden layers in every value -> width varies, depth does not.
+  # Applied to every task in the chain (train_res_CRL.py forwards it to each child).
+  agent.policy.actor_hidden_dims:
+    values:
+      - "[128,64,32]"
+      - "[256,128,64]"
+      - "[512,256,128]"     # current ResCfg default
+      - "[512,512,256]"
+      - "[1024,512,256]"
+      - "[1024,1024,512]"

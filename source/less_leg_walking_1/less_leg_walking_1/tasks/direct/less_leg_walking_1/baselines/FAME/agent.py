@@ -63,10 +63,17 @@ FAME_DEFAULT_CONFIG = {
     "gamma":          0.99,
     "gae_lambda":     0.95,
     "clip_ratio":     0.2,
-    "entropy_coef":   0.02,
     "value_coef":     1.0,
     # Tighter gradient clipping can help stabilise learning on large batches
     "grad_norm_clip": 0.5,
+
+    # --- Exploration temperature (SAC-style auto-tuning) ---
+    # The squashed actor's entropy is regulated toward a target entropy instead
+    # of a fixed entropy bonus, mirroring the original FAME SAC temperature
+    # (agent/sac.py). ``target_entropy`` defaults to -action_dim when None.
+    "init_temperature": 0.1,   # initial alpha = exp(log_alpha)
+    "alpha_lr":         1e-4,
+    "target_entropy":   None,  # None -> -action_dim
 
     # --- PPO update schedule ---
     "rollout_steps": 24,
@@ -82,8 +89,6 @@ FAME_DEFAULT_CONFIG = {
     "epoch_meta":     200,
     "meta_lr_scheduler_gamma": 0.95,
     "reset":     True,
-    "warmstep":  50_000,    # rollout rows with BC warm-start regularisation
-    "lambda_reg": 1.0,
 
     # --- network architecture ---
     # Matches train-from-scratch PPO baseline: [512, 256, 128]
@@ -184,42 +189,48 @@ class FAMEAgent(Agent):
         hidden = _cfg["hidden_dims"]
         act    = _cfg["activation"]
 
-        # ---- Fast Learner: PPO actor + value network --------------------
+        # ---- Fast Learner: squashed PPO actor + value network -----------
         self.fast_actor  = PPOActor(obs_dim, action_dim, hidden, activation=act).to(self.device)
         self.fast_critic = PPOCritic(obs_dim, hidden, activation=act).to(self.device)
         self.fast_actor_opt  = Adam(self.fast_actor.parameters(),  lr=_cfg["lr_actor"])
         self.fast_critic_opt = Adam(self.fast_critic.parameters(), lr=_cfg["lr_critic"])
 
-        # ---- Meta Learner: same PPO architecture as fast learner -------
+        # ---- Meta Learner: actor-only (mirrors original FAME) ----------
+        # The original meta learner is selected purely via env-rollout return
+        # and warm-starts the fast learner's *actor* only, so there is no meta
+        # critic (agent/sac.py + test_main.py).
         self.meta_actor  = PPOActor(obs_dim, action_dim, hidden, activation=act).to(self.device)
-        self.meta_critic = PPOCritic(obs_dim, hidden, activation=act).to(self.device)
         self.meta_actor_opt  = Adam(self.meta_actor.parameters(),  lr=_cfg["lr_meta"])
-        self.meta_critic_opt = Adam(self.meta_critic.parameters(), lr=_cfg["lr_meta"])
-        self.meta_scheduler        = ExponentialLR(self.meta_actor_opt,  gamma=_cfg["meta_lr_scheduler_gamma"])
-        self.meta_critic_scheduler = ExponentialLR(self.meta_critic_opt, gamma=_cfg["meta_lr_scheduler_gamma"])
+        self.meta_scheduler  = ExponentialLR(self.meta_actor_opt,  gamma=_cfg["meta_lr_scheduler_gamma"])
 
-        # ---- Random Learner: same PPO architecture as fast learner. This is only used for initialization, not to be trained -------
-        self.random_actor  = PPOActor(obs_dim, action_dim, hidden, activation=act).to(self.device)
+        # ---- Auto-tuned exploration temperature (SAC-style) ------------
+        # Regulates the fast actor's entropy toward ``target_entropy`` instead
+        # of a fixed entropy bonus, preventing log_std/action blow-up.
+        self._target_entropy = (
+            float(_cfg["target_entropy"]) if _cfg.get("target_entropy") is not None
+            else -float(action_dim)
+        )
+        self._init_temperature = _cfg["init_temperature"]
+        self.log_alpha = torch.tensor(
+            float(np.log(self._init_temperature)), device=self.device, requires_grad=True
+        )
+        self.log_alpha_opt = Adam([self.log_alpha], lr=_cfg["alpha_lr"])
 
         # ---- Register for skrl checkpointing ---------------------------
         self.checkpoint_modules["fast_actor"]  = self.fast_actor
         self.checkpoint_modules["fast_critic"] = self.fast_critic
         self.checkpoint_modules["meta_actor"]  = self.meta_actor
-        self.checkpoint_modules["meta_critic"] = self.meta_critic
 
         # ---- Hyper-parameter aliases -----------------------------------
         self._gamma         = _cfg["gamma"]
         self._gae_lambda    = _cfg["gae_lambda"]
         self._clip_ratio    = _cfg["clip_ratio"]
-        self._entropy_coef  = _cfg["entropy_coef"]
         self._value_coef    = _cfg["value_coef"]
         self._grad_clip     = _cfg["grad_norm_clip"]
         self._reward_scale  = _cfg["rewards_shaper_scale"]
         self._rollout_steps = _cfg["rollout_steps"]
         self._ppo_epochs    = _cfg["ppo_epochs"]
         self._mini_batch    = _cfg["mini_batch_size"]
-        self._warmstep      = _cfg["warmstep"]
-        self._lambda_reg    = _cfg["lambda_reg"]
 
         # ---- Tensor name lists -----------------------------------------
         self._rollout_names = ["states", "actions", "rewards", "next_states",
@@ -229,8 +240,8 @@ class FAMEAgent(Agent):
         # ---- Internal state --------------------------------------------
         self._update_count: int = 0
         self._task_step: int    = 0
-        self._meta_warmup: bool = False
         self._rollout_ptr: int  = 0   # rows collected in current rollout
+        self._meta_trained: bool = False  # True once the meta actor has been distilled
 
         # ---- FAME tracking ---------------------------------------------
         self.games: List[str]    = []
@@ -259,11 +270,15 @@ class FAMEAgent(Agent):
             mem.create_tensor(name="states",  size=self.observation_space, dtype=torch.float32)
             mem.create_tensor(name="actions", size=self.action_space,      dtype=torch.float32)
 
+    @property
+    def alpha(self) -> torch.Tensor:
+        """Current exploration temperature ``exp(log_alpha)``."""
+        return self.log_alpha.exp()
+
     def set_mode(self, mode: str) -> None:
         """Toggle train/eval on all plain nn.Module networks."""
         training = (mode == "train")
-        for net in (self.fast_actor, self.fast_critic,
-                    self.meta_actor, self.meta_critic):
+        for net in (self.fast_actor, self.fast_critic, self.meta_actor):
             net.train(training)
 
     def act(
@@ -358,15 +373,23 @@ class FAMEAgent(Agent):
     ) -> str:
         """Detection + initialisation at task switch (mirrors test_main.py).
 
+        Faithful to the original FAME ``buffer_wd`` switch
+        (``FAME/Metaworld/test_main.py`` lines 291-319): every task starts from
+        a **fresh** learner, and detection chooses between exactly two
+        candidates — the fresh (random) learner and the meta learner. The
+        previous task's fast learner is **never** carried forward. If the meta
+        learner evaluates better on the new task, its *actor* warm-starts the
+        fresh learner; otherwise the fresh (random) init is kept.
+
         Parameters
         ----------
         eval_fn : callable
             ``eval_fn(actor, num_steps) -> float`` – runs the actor in the
-            *new* environment and returns mean episode return.
+            *new* environment (deterministic mean action) and returns mean
+            episode return.
         """
         self.games.append(new_env_name)
-        self._meta_warmup = False
-        self._task_step   = 0
+        self._task_step = 0
 
         if is_first_switch:
             print(f"[FAME] First environment: {new_env_name} – no detection needed.")
@@ -375,46 +398,58 @@ class FAMEAgent(Agent):
 
         det_steps = self.cfg["detection_step"]
         print(f"\n[FAME] ══ Switching to {new_env_name} ══")
-        print("[FAME] Step 1: Detection via Policy Evaluation …")
+        print("[FAME] Step 1: reset Fast-Learner (fresh actor + critic).")
+        # Fresh random learner for the new task (fresh actor, critic, opts, alpha).
+        self._reset_fast_learner()
 
-        avg_fast = eval_fn(self.fast_actor, det_steps)
-        print(f"[FAME]   Fast-Learner avg return: {avg_fast:.3f}")
+        print("[FAME] Step 2: Detection via Policy Evaluation …")
+        avg_fresh = eval_fn(self.fast_actor, det_steps)
+        avg_meta  = eval_fn(self.meta_actor, det_steps)
+        print(f"[FAME]   Fresh (random) avg return: {avg_fresh:.3f}")
+        print(f"[FAME]   Meta-Learner   avg return: {avg_meta:.3f}")
 
-
-        avg_meta = eval_fn(self.meta_actor, det_steps)
-        print(f"[FAME]   Meta-Learner avg return: {avg_meta:.3f}")
-    
-        avg_random = eval_fn(self.random_actor, det_steps)
-        print(f"[FAME]   Random-Learner avg return: {avg_random:.3f}")
-
-        avgs = [avg_fast, avg_meta, avg_random]
-
-        if np.argmax(avgs) == 0:
-            print("[FAME] Step 2: Fine-tune Fast-Learner (Fast ≥ Meta).")
-            choice = "Fast"
-        elif np.argmax(avgs) == 1:
-            print("[FAME] Step 2: Meta init → warm-starting Fast-Learner.")
-            self._copy_meta_to_fast()
-            self._meta_warmup = True
+        if avg_meta > avg_fresh:
+            print("[FAME] Step 3: Meta init → warm-starting Fast-Learner actor.")
+            self._copy_meta_to_fast()   # copy meta *actor* only; critic stays fresh
             choice = "Meta"
         else:
-            print("[FAME] Step 2: Random init (both policies poor).")
-            self._reset_fast_learner()
+            print("[FAME] Step 3: Random init (fresh learner ≥ meta).")
             choice = "Random"
 
+        self._log_detection(new_env_name, avg_fresh, avg_meta, choice)
         self.flag_reg.append(choice)
         return choice
 
-    def end_of_env_segment(self) -> None:
-        """Distil Fast→Meta, copy fast2meta→meta, reset buffers for next task."""
-        if len(self.memory_meta) > 0:
-            print("[FAME] Step 3: Updating Meta-Learner …")
-            t0 = time.time()
-            self._train_meta()
-            print(f"[FAME]   Meta update done in {time.time() - t0:.1f}s")
-        else:
-            print("[FAME] Step 3: First segment – no Meta update needed.")
+    def _log_detection(self, env_name: str, avg_fresh: float, avg_meta: float, choice: str) -> None:
+        """Log the detection returns and chosen init to TensorBoard/console."""
+        task_idx = len(self.games) - 1
+        writer = getattr(self, "writer", None)
+        if writer is not None:
+            try:
+                writer.add_scalar("Detection/avg_fresh", float(avg_fresh), task_idx)
+                writer.add_scalar("Detection/avg_meta",  float(avg_meta),  task_idx)
+                # 1 = Meta warm-start, 0 = fresh/random
+                writer.add_scalar("Detection/from_meta", 1.0 if choice == "Meta" else 0.0, task_idx)
+            except Exception:
+                pass
+        print(f"[FAME] Detection[{task_idx}] {env_name}: "
+              f"fresh={avg_fresh:.3f} meta={avg_meta:.3f} -> {choice}", flush=True)
 
+    def end_of_env_segment(self) -> None:
+        """Distil Fast→Meta, append this task's data to the meta buffer, reset.
+
+        The distillation runs after **every** task (including the first), so the
+        current task's fast policy is always absorbed into the meta learner —
+        mirroring the original, where ``actor_wd_loss`` runs at each switch with
+        ``current_loss`` always present.
+        """
+        print("[FAME] Step 3: Updating Meta-Learner …")
+        t0 = time.time()
+        self._train_meta()
+        print(f"[FAME]   Meta update done in {time.time() - t0:.1f}s")
+
+        # Append this task's (states, actions) to the accumulated meta buffer,
+        # then clear the current-task buffer.
         self._copy_fast2meta_to_meta()
         self.memory_fast2meta.reset()
         print(
@@ -488,11 +523,8 @@ class FAMEAgent(Agent):
         # Normalise advantages
         adv_flat = (adv_flat - adv_flat.mean()) / (adv_flat.std() + 1e-8)
 
-        # Reg actor (meta warm-start)
-        reg_actor = self.meta_actor if self._meta_warmup else None
-
         total_samples = T * N
-        total_pg_loss = total_vf_loss = total_ent = 0.0
+        total_pg_loss = total_vf_loss = total_ent = total_alpha = 0.0
         n_updates = 0
 
         for _ in range(self._ppo_epochs):
@@ -514,32 +546,41 @@ class FAMEAgent(Agent):
                 ret_b   = ret_flat[idx]
                 adv_b   = adv_flat[idx]
 
-                # ---- Actor loss (clipped surrogate + entropy) --------
-                new_lp, entropy = self.fast_actor.evaluate(obs_b, act_b)
+                # ---- PPO clipped surrogate on the STORED actions ----------
+                new_lp, _ = self.fast_actor.evaluate(obs_b, act_b)
                 ratio    = (new_lp - old_lp).exp()
                 surr1    = ratio * adv_b
                 surr2    = ratio.clamp(1 - self._clip_ratio, 1 + self._clip_ratio) * adv_b
                 pg_loss  = -torch.min(surr1, surr2).mean()
-                ent_loss = -entropy.mean()
 
-                # BC warm-start: WD loss on (mu, std) against meta actor
-                bc_loss = torch.tensor(0.0, device=self.device)
-                if reg_actor is not None and self._lambda_reg > 0 and self._task_step < self._warmstep:
-                    with torch.no_grad():
-                        meta_mu, meta_std = reg_actor.get_dist_params(obs_b)
-                    fast_mu, fast_std = self.fast_actor.get_dist_params(obs_b)
-                    bc_loss = torch.mean(
-                        torch.square(fast_mu - meta_mu).sum(-1) +
-                        torch.square(fast_std - meta_std).sum(-1)
-                    )
-
-                actor_loss = pg_loss + self._entropy_coef * ent_loss + self._lambda_reg * bc_loss
+                # ---- Entropy regularisation on FRESH reparameterised samples
+                # (SAC-style). We maximise the CURRENT policy's entropy, NOT the
+                # improbability of stored actions: the latter is unbounded below
+                # for a tanh-squashed density (pushing mu/std to extremes sends
+                # log p(stored) -> -inf), which diverges. dist.rsample keeps the
+                # gradient path through the sampled action.
+                dist_b     = self.fast_actor(obs_b)
+                a_fresh    = dist_b.rsample()
+                logp_fresh = dist_b.log_prob(a_fresh).sum(-1, keepdim=True)
+                entropy    = -logp_fresh                       # (B,1) entropy estimate
+                # Maximise entropy == minimise logp_fresh, weighted by alpha.
+                actor_loss = pg_loss + self.alpha.detach() * logp_fresh.mean()
 
                 self.fast_actor_opt.zero_grad()
                 actor_loss.backward()
                 if self._grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(self.fast_actor.parameters(), self._grad_clip)
                 self.fast_actor_opt.step()
+
+                # ---- Temperature (alpha) update toward target entropy ----
+                # alpha_loss = alpha * (entropy_estimate - target_entropy).detach()
+                # (mirrors SAC). log_alpha is clamped so alpha stays in a sane range.
+                alpha_loss = (self.alpha * (entropy - self._target_entropy).detach()).mean()
+                self.log_alpha_opt.zero_grad()
+                alpha_loss.backward()
+                self.log_alpha_opt.step()
+                with torch.no_grad():
+                    self.log_alpha.clamp_(min=-5.0, max=2.0)
 
                 # ---- Value loss (clipped) ----------------------------
                 new_val = self.fast_critic(obs_b)
@@ -557,7 +598,8 @@ class FAMEAgent(Agent):
 
                 total_pg_loss += pg_loss.item()
                 total_vf_loss += vf_loss.item()
-                total_ent     += (-ent_loss.item())
+                total_ent     += entropy.mean().item()
+                total_alpha   += self.alpha.item()
                 n_updates     += 1
 
         self._update_count += 1
@@ -573,6 +615,8 @@ class FAMEAgent(Agent):
                 _, _fast_std = self.fast_actor.get_dist_params(s_flat)
             self.track_data("Policy/mean_noise_std", _fast_std.mean().item())
             # FAME-specific extras (no rsl_rl analog)
+            self.track_data("Fast/alpha", total_alpha / n_updates)
+            self.track_data("Fast/target_entropy", self._target_entropy)
             self.track_data("Fast/returns_mean", ret_flat.mean().item())
             self.track_data("Fast/advantages_mean", adv_flat.mean().item())
 
@@ -581,88 +625,90 @@ class FAMEAgent(Agent):
     # ------------------------------------------------------------------
 
     def _train_meta(self) -> None:
-        """Distil Fast PPO actor/critic into Meta PPO actor/critic.
+        """Distil the current Fast actor into the (actor-only) Meta learner.
 
-        Actor distillation: WD loss on ``(mu, std)`` of the Gaussian policy.
-        Critic distillation: MSE loss ``V_meta(s) ≈ V_fast(s)``.
+        Faithful mirror of ``actor_wd_loss`` (``FAME/Metaworld/agent/sac.py``):
 
-        Both Fast and Meta use ``PPOActor`` / ``PPOCritic``, so
-        ``get_dist_params`` returns comparable ``(mu, std)`` pairs.
+        * **New knowledge** — Wasserstein loss on ``(mu, std)`` between the meta
+          actor and the *current fast* actor, over this task's transitions
+          (``memory_fast2meta``). Applied every task (including the first).
+        * **Old knowledge** — Wasserstein loss between the meta actor and a
+          *snapshot of the previous meta* (taken before this update), over the
+          accumulated past-task transitions (``memory_meta``). Applied only once
+          a previous meta exists (i.e. from the 2nd distillation onward), mirroring
+          the ``pre_meta_agent is None -> meta_loss = 0`` branch.
+
+        There is no meta critic: the meta learner is actor-only and is selected
+        purely via env-rollout return at the next switch.
         """
         batch_size = self.cfg.get("mini_batch_size", 1024)
-        if len(self.memory_meta) < batch_size:
-            print("[FAME]   Meta buffer too small to train; skipping.")
+        f2m_ready  = len(self.memory_fast2meta) >= batch_size
+        old_ready  = self._meta_trained and len(self.memory_meta) >= batch_size
+
+        if not f2m_ready and not old_ready:
+            print("[FAME]   Meta buffers too small to distil; skipping.")
             return
 
-        # Re-init optimisers to restore base lr
-        self.meta_actor_opt  = Adam(self.meta_actor.parameters(),  lr=self.cfg["lr_meta"])
-        self.meta_critic_opt = Adam(self.meta_critic.parameters(), lr=self.cfg["lr_meta"])
-        self.meta_scheduler        = ExponentialLR(self.meta_actor_opt,  gamma=self.cfg["meta_lr_scheduler_gamma"])
-        self.meta_critic_scheduler = ExponentialLR(self.meta_critic_opt, gamma=self.cfg["meta_lr_scheduler_gamma"])
+        # Snapshot of the previous meta = accumulated old knowledge anchor.
+        prev_meta = copy.deepcopy(self.meta_actor) if old_ready else None
 
-        u_steps   = max(1, len(self.memory_meta) // batch_size - 1)
-        f2m_ready = len(self.memory_fast2meta) >= batch_size
+        # Re-init optimiser + scheduler to restore base lr for this distillation.
+        self.meta_actor_opt = Adam(self.meta_actor.parameters(), lr=self.cfg["lr_meta"])
+        self.meta_scheduler = ExponentialLR(self.meta_actor_opt, gamma=self.cfg["meta_lr_scheduler_gamma"])
+
+        ref_len = max(len(self.memory_meta), len(self.memory_fast2meta))
+        u_steps = max(1, ref_len // batch_size - 1)
 
         for epoch in range(self.cfg["epoch_meta"]):
-            for i in range(u_steps):
-                # --- Old-task WD loss (meta buffer) ----------------------
-                (states_meta, _) = self.memory_meta.sample(
-                    names=self._meta_names, batch_size=batch_size
-                )[0]
-                states_meta = states_meta.to(self.device)
-                with torch.no_grad():
-                    fast_mu, fast_std = self.fast_actor.get_dist_params(states_meta)
-                meta_mu, meta_std = self.meta_actor.get_dist_params(states_meta)
-                meta_loss = torch.mean(
-                    torch.square(meta_mu - fast_mu).sum(-1) +
-                    torch.square(meta_std - fast_std).sum(-1)
-                )
-
-                # --- Current-task WD loss (fast2meta buffer) -------------
-                if f2m_ready and (i % max(1, u_steps) == 0):
+            last_loss = 0.0
+            for _ in range(u_steps):
+                # --- New knowledge: match current fast on this task's data ---
+                new_loss = torch.zeros((), device=self.device)
+                if f2m_ready:
                     (states_fast, _) = self.memory_fast2meta.sample(
                         names=self._meta_names, batch_size=batch_size
                     )[0]
                     states_fast = states_fast.to(self.device)
                     with torch.no_grad():
                         curr_mu, curr_std = self.fast_actor.get_dist_params(states_fast)
-                    m2_mu, m2_std = self.meta_actor.get_dist_params(states_fast)
-                    current_loss = torch.mean(
-                        torch.square(m2_mu - curr_mu).sum(-1) +
-                        torch.square(m2_std - curr_std).sum(-1)
+                    m_mu, m_std = self.meta_actor.get_dist_params(states_fast)
+                    new_loss = torch.mean(
+                        torch.square(m_mu - curr_mu).sum(-1) +
+                        torch.square(m_std - curr_std).sum(-1)
                     )
-                    actor_loss = meta_loss + current_loss
-                else:
-                    actor_loss = meta_loss
 
+                # --- Old knowledge: match previous meta on past-task data ----
+                old_loss = torch.zeros((), device=self.device)
+                if old_ready and prev_meta is not None:
+                    (states_meta, _) = self.memory_meta.sample(
+                        names=self._meta_names, batch_size=batch_size
+                    )[0]
+                    states_meta = states_meta.to(self.device)
+                    with torch.no_grad():
+                        prev_mu, prev_std = prev_meta.get_dist_params(states_meta)
+                    mo_mu, mo_std = self.meta_actor.get_dist_params(states_meta)
+                    old_loss = torch.mean(
+                        torch.square(mo_mu - prev_mu).sum(-1) +
+                        torch.square(mo_std - prev_std).sum(-1)
+                    )
+
+                actor_loss = new_loss + old_loss
                 self.meta_actor_opt.zero_grad()
                 actor_loss.backward()
                 self.meta_actor_opt.step()
-
-            # --- Critic distillation: V_meta(s) ≈ V_fast(s) -------------
-            (s_m, _) = self.memory_meta.sample(
-                names=self._meta_names, batch_size=batch_size
-            )[0]
-            s_m = s_m.to(self.device)
-            with torch.no_grad():
-                fast_v = self.fast_critic(s_m)   # (B, 1)
-            meta_v = self.meta_critic(s_m)        # (B, 1)
-            critic_loss = F.mse_loss(meta_v, fast_v)
-            self.meta_critic_opt.zero_grad()
-            critic_loss.backward()
-            self.meta_critic_opt.step()
+                last_loss = actor_loss.item()
 
             if (epoch + 1) % 10 == 0 or epoch == 0:
                 print(
-                    f"[FAME]   Epoch {epoch+1}/{self.cfg['epoch_meta']}  "
-                    f"actor_loss={actor_loss.item():.3e}  "
-                    f"critic_loss={critic_loss.item():.3e}  "
+                    f"[FAME]   Meta epoch {epoch+1}/{self.cfg['epoch_meta']}  "
+                    f"actor_loss={last_loss:.3e}  "
                     f"lr={self.meta_actor_opt.param_groups[0]['lr']:.2e}  "
                     + time.strftime("%H:%M:%S")
                 )
             if (epoch + 1) % 2 == 0:
                 self.meta_scheduler.step()
-                self.meta_critic_scheduler.step()
+
+        self._meta_trained = True
 
     # ------------------------------------------------------------------
     # Helpers
@@ -688,28 +734,36 @@ class FAMEAgent(Agent):
             self.memory_meta.add_samples(states=chunk_s, actions=chunk_a)
 
     def _copy_meta_to_fast(self) -> None:
-        """Warm-start Fast PPO actor/critic from Meta PPO networks.
+        """Warm-start the Fast actor from the Meta actor (actor weights only).
 
-        Since both Fast and Meta share identical ``PPOActor`` / ``PPOCritic``
-        architectures, we can directly copy all weights.
+        Mirrors the original FAME warm-start
+        (``agent.actor.load_state_dict(meta_agent.actor.state_dict())`` in
+        ``test_main.py``): only the **actor** is copied. The freshly-reset
+        critic and its optimiser are left untouched so the value function is
+        learned from scratch for the new task.
         """
         self.fast_actor.load_state_dict(
             copy.deepcopy(self.meta_actor.state_dict())
         )
-        self.fast_critic.load_state_dict(
-            copy.deepcopy(self.meta_critic.state_dict())
-        )
-        # Re-init optimisers so momentum buffers don't carry over
-        self.fast_actor_opt  = Adam(self.fast_actor.parameters(),  lr=self.cfg["lr_actor"])
-        self.fast_critic_opt = Adam(self.fast_critic.parameters(), lr=self.cfg["lr_critic"])
+        # Re-init the actor optimiser so momentum buffers don't carry over.
+        self.fast_actor_opt = Adam(self.fast_actor.parameters(), lr=self.cfg["lr_actor"])
 
     def _reset_fast_learner(self) -> None:
-        """Re-initialise Fast-Learner PPO networks with random weights."""
+        """Re-initialise the Fast-Learner (actor + critic + opts + temperature).
+
+        Every task starts from a fresh learner, matching the original FAME
+        ``agent_list[i]`` (one fresh SAC agent per task).
+        """
         hidden = self.cfg["hidden_dims"]
         act    = self.cfg["activation"]
         self.fast_actor  = PPOActor(self.obs_dim, self.action_dim, hidden, activation=act).to(self.device)
         self.fast_critic = PPOCritic(self.obs_dim, hidden, activation=act).to(self.device)
         self.fast_actor_opt  = Adam(self.fast_actor.parameters(),  lr=self.cfg["lr_actor"])
         self.fast_critic_opt = Adam(self.fast_critic.parameters(), lr=self.cfg["lr_critic"])
+        # Reset the exploration temperature to its initial value for the new task.
+        self.log_alpha = torch.tensor(
+            float(np.log(self._init_temperature)), device=self.device, requires_grad=True
+        )
+        self.log_alpha_opt = Adam([self.log_alpha], lr=self.cfg["alpha_lr"])
         self.checkpoint_modules["fast_actor"]  = self.fast_actor
         self.checkpoint_modules["fast_critic"] = self.fast_critic

@@ -1,0 +1,110 @@
+# =============================================================================
+# W&B sweep: CompoNet — tune the WIDTH of the internal policy, applied uniformly
+#            to EVERY module of the CRL chain.
+# Mirrors scripts/wandb_sweep/residual_actor_width.yaml for the `compo` method.
+# =============================================================================
+#
+# WHAT IS SWEPT — and why it is NOT actor_hidden_dims:
+#   For CompoNet the trainable per-task network is the INTERNAL POLICY, built from
+#   `internal_policy_hidden_dims` (CompoNet.py:58-80). `actor_hidden_dims` is a dead
+#   placeholder here: CompoActorCritic passes it to ActorCritic.__init__ only to
+#   satisfy the base class, then immediately REPLACES self.actor with a CompoNet /
+#   FirstModuleWrapper (CompoNet.py:50, 91-101). Sweeping actor_hidden_dims would
+#   change nothing at all. So this sweep varies `internal_policy_hidden_dims`, and
+#   every candidate value has EXACTLY THREE entries -> width varies, depth does not.
+#
+#   IMPORTANT COUPLING: `hidden_dim = internal_hidden_dims[0]` (CompoNet.py:35). The
+#   FIRST entry therefore also sets the attention dimension of BOTH attention heads
+#   (headout_wq/wk, headin_wq/wk/wv) and the attention temperature sqrt(hidden_dim),
+#   and it widens the internal policy's input (obs_dim + hidden_dim). So the first
+#   entry is a bigger structural lever than entries 2 and 3 — it is not a pure
+#   "number of nodes in layer 1" knob. Shapes below are chosen to vary it over the
+#   same range as the residual sweep so the two are comparable.
+#
+# One trial = one full CRL chain:
+#   The program is train_componet_CRL.py. The driver forwards every unknown arg
+#   verbatim to each per-task train_componet.py call, so the swept override applies
+#   to EVERY CompoNet module in the chain. The chain starts fresh (no --prevs_dir on
+#   the first task -> FirstModuleWrapper), so no pre-trained checkpoint needs to
+#   exist before launching and nothing is reused between trials. Tasks are whatever
+#   is uncommented in TRAIN_TASKS in train_componet_CRL.py (currently the full
+#   5-task chain, matching train_res_CRL.py). NOTE the cost: 6 trials x 5 tasks x
+#   1200 iterations. Comment tasks out of TRAIN_TASKS to shorten the chain.
+#
+# What is deliberately NOT swept:
+#   * critic_hidden_dims — stays at the CompoCfg default [512, 256, 128]. The critic
+#     IS a real MLP for this method (unlike actor_hidden_dims), but holding it fixed
+#     keeps the comparison about composition capacity alone.
+#   * activation ("elu") and every PPO hyperparameter: those come from
+#     agents/algo_cfg/compo.yaml per terrain.
+#   * init_noise_std — CANNOT be overridden: never assigned on CompoCfg, so it stays
+#     `dataclasses.MISSING`, to_dict() renders it as `{}` and from_dict rejects any
+#     value. CompoActorCritic falls back to 0.8 (CompoNet.py:39-43).
+#
+# !!! REQUIRED BEFORE RUNNING !!!
+#   Set ALGO_METHOD = "compo" in
+#   source/.../less_leg_walking_1/agents/rsl_rl_ppo_cfg.py (line 25). It is a
+#   module-level constant with NO CLI override, and it selects BOTH the policy cfg
+#   (make_policy_cfg) and the PPO block (algo_cfg/<method>.yaml). If it is left at
+#   "res" this sweep silently trains RESIDUAL policies and every trial gets the same
+#   (meaningless) result, because agent.policy.internal_policy_hidden_dims is not a
+#   field of ResCfg. Remember to set it back afterwards.
+#
+# How to run (from the REPOSITORY ROOT so logs/ resolves):
+#   wandb sweep scripts/wandb_sweep/componet_internal_width.yaml
+#   wandb agent <entity>/componet-internal-width-sweep/<sweep_id>
+#
+# Metrics (identical to the residual sweep — see scripts/common/crl_wandb.py):
+#   * Train/mean_reward       — one continuous curve across the whole chain.
+#   * crl/task<i>_<task>_final_reward — each task's final reward (summary).
+#   * crl/mean_final_reward   — mean of the per-task finals = THE OBJECTIVE.
+#   * crl/final_task_reward   — the last task's final reward.
+#
+# Notes:
+#   * `${args_no_hyphens}` expands each swept parameter as `key=value`, i.e. a Hydra
+#     override applied via @hydra_task_config -> agent_cfg.from_dict.
+#   * The shapes are QUOTED STRINGS: wandb serializes a value with a plain
+#     f"{param}={value}", so a string emits the bracket literal verbatim and Hydra
+#     parses it into a real list[int].
+#   * `agent.run_name=${oc.env:WANDB_RUN_ID}` gives every trial its own per-task log
+#     dir (logs/task1/<experiment_name>/componet_<runid>/). REQUIRED, not cosmetic:
+#     the driver reads each task's TensorBoard events back out of that dir, and a
+#     shared dir would mix several trials' events into one replay. Running the
+#     command by hand outside a wandb agent needs WANDB_RUN_ID set, or oc.env raises.
+#   * `project:` MUST match --wandb_project, or the driver's run lands in a different
+#     project and the sweep controller never sees the metric.
+#   * No early_terminate: the x-axis is cumulative gradient steps, so a hyperband
+#     min_iter would need those units, and pruning on task-1 reward alone would
+#     discard settings that trade early performance for retention later in the chain.
+# =============================================================================
+
+program: scripts/rsl_rl/train_componet_CRL.py
+method: grid
+project: componet-internal-width-sweep
+
+metric:
+  name: crl/mean_final_reward
+  goal: maximize
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --headless
+  - --max_iterations=1200
+  - --wandb
+  - --wandb_project=componet-internal-width-sweep
+  - agent.run_name=${oc.env:WANDB_RUN_ID}
+  - ${args_no_hyphens}
+
+parameters:
+  # Exactly 3 hidden layers in every value -> width varies, depth does not.
+  # Entry 0 additionally sets the attention dimension (see the header).
+  agent.policy.internal_policy_hidden_dims:
+    values:
+      - "[128,64,32]"
+      - "[256,128,64]"
+      - "[512,256,128]"     # current CompoCfg default
+      - "[512,512,256]"
+      - "[1024,512,256]"
+      - "[1024,1024,512]"

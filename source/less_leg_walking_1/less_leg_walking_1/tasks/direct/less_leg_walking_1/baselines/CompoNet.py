@@ -17,8 +17,10 @@ class CompoCfg(RslRlPpoActorCriticCfg):
     activation: str = "elu"
     actor_obs_normalization: bool = False
     critic_obs_normalization: bool = False
-    internal_policy_hidden_dims: list[int] = [512, 256, 128]
-    actor_hidden_dims: list[int] = [512, 256, 128]
+    # The real per-task network. NOTE: entry [0] doubles as CompoNet's attention
+    # dimension (hidden_dim), see CompoActorCritic.__init__.
+    internal_policy_hidden_dims: list[int] = [512, 512, 256]
+    actor_hidden_dims: list[int] = [512, 256, 128]  # unused: self.actor is replaced by CompoNet
     critic_hidden_dims: list[int] = [512, 256, 128]
     prevs_dir: list = []
     
