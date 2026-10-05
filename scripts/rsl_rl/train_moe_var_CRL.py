@@ -44,7 +44,7 @@ TRAIN_TASKS = [ # train in this order
 TASK_DIRECTORY = Path("source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1")
 KAE_ROOT = TASK_DIRECTORY / "KAEs"            # shared; holds the original task KAE only
 SESSION_ROOT = KAE_ROOT / "sessions_var"      # per-session artifacts of the variant
-LOG_ROOT = Path("logs/task1")                 # where train_moe_var.py writes runs
+LOG_ROOT = Path("logs/rsl_rl")                 # where train_moe_var.py writes runs
 KAE_APPROX_FILE = TASK_DIRECTORY / "agents" / "KAE_approx_var.py"
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -425,7 +425,6 @@ def main():
         environment["CRL_SESSION_ID"] = session_id                     # new
         environment["CRL_KAE_LOG_DIRECTORY"] = str(kae_log_directory)  # new
         environment["CRL_TASK_INDEX"] = str(index + 1)                 # new
-        environment["CRL_KAE_DIVERSITY_COEFFICIENT"] = str(arguments.diversity_coefficient)
 
         print(f"\n[CRL] ({index + 1}/{len(TRAIN_TASKS)}) Training: {task_name}")
         print("[CRL] Previous KAEs:", state["completed_tasks"])

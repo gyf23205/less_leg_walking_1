@@ -24,16 +24,14 @@ class MoEVarCfg(RslRlPpoActorCriticCfg):
     padded_dim: int = 256
     observable_dim: int = 16
     actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
-    # actor_hidden_dims: list[int] = [128, 64, 32]
-    critic_hidden_dims: list[int] = [512, 256, 128]
+    critic_hidden_dims: list[int] = [512, 256, 128] # FIXED, DO NOT TOUCH
     gating_hidden_dims: list[int] = [32] #[64, 32] # gating network
     weight_hidden_dims: list[int] = [32] # wieght network
     weight_router_hidden_dims: list[int] = [128] # weight router network
-    # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
     
 
     # Experiment log    
-    # Done
+    # MoE, not MoEVar
                             #  res             g          g_bias    w_bias    weight          wegiht_router                NOTE
     # 2026-08-17_12-04-15   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32, 16]        [128, 64]                    Stack makes learning slow as task num grows
     # 2026-08-17_21-19-27   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [256, 128]                   Overall good, SUCCESS
@@ -54,15 +52,6 @@ class MoEVarCfg(RslRlPpoActorCriticCfg):
     activation: str = "elu"
     init_noise_std: float = 1.0  # ADD THIS - match train_scratch
 
-    # Set explicitly (don't reference other fields)
-    # num_actor_obs: int = 256  # Match padded_dim or your obs space
-    # num_critic_obs: int = 256
-    # num_actions: int = 9
-    
-    # obs_groups = {
-    #     "policy": ["policy"],
-    #     "critic": ["policy"],
-    # }
 
 import torch
 import torch.nn as nn

@@ -2,13 +2,13 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
+import os
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
 
 # mode = "scratch"  # Choose from "scratch", "residual", "MoE", or "component"
-mode = "MoE"  # Choose from "scratch", "residual", "MoE", or "component"
+mode = "MoEVar"  # Choose from "scratch", "residual", "MoE", or "component"
 
 # ############################################
 # USE THIS FOR TRAIN_SCRATCH OR RESIDUAL
@@ -57,6 +57,10 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # USE THIS FOR MoE
     if mode == "MoE":
         policy = MoECfg()
+
+    # USE THIS FOR MoE_var
+    if mode == "MoEVar":
+        policy = MoEVarCfg()
 
     # USE THIS FOR COMPONENT
     if mode == "component":
@@ -144,6 +148,10 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # USE THIS FOR MoE
     if mode == "MoE":
         policy = MoECfg()
+
+    # USE THIS FOR MoE_var
+    if mode == "MoEVar":
+        policy = MoEVarCfg()
 
     # USE THIS FOR COMPONENT
     if mode == "component":
