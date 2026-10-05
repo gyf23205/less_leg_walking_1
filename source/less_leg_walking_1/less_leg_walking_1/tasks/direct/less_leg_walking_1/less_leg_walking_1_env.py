@@ -198,6 +198,7 @@ class LessLegWalkingEnv(DirectRLEnv):
         else:
             weight_stability = torch.zeros(self.num_envs, device=self.device)
 
+        ##########################################################
 
         MoE_magnitude_penality = torch.zeros(self.num_envs, device=self.device)
         if hasattr(self, "_policy_ref") and self._policy_ref is not None:
