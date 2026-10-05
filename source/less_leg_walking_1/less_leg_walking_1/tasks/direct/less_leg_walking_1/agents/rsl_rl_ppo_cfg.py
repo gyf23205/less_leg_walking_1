@@ -19,6 +19,10 @@ if mode == "scratch" or mode == "residual":
 if mode == "MoE":
     from ..MoE import MoECfg, MoEActorCritic  # Import both
 
+# USE THIS FOR MoE_var
+if mode == "MoEVar":
+    from ..MoE_var import MoEVarCfg, MoEVarActorCritic  # Import both
+
 # USE THIS FOR COMPONENT
 if mode == "component":
     from ..baselines.CompoNet import CompoCfg, CompoActorCritic  # Import both
@@ -37,6 +41,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = {
             "scratch": "less_leg_walking_flat",
             "MoE": "MoE16_less_leg_walking_flat",
+            "MoEVar": "MoEVar_less_leg_walking_flat",
             "residual": "Residual_less_leg_walking_flat",
             "component": "Component_less_leg_walking_flat"
         }[mode]
@@ -89,6 +94,7 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
     experiment_name = {
             "scratch": "less_leg_walking_rough",
             "MoE": "MoE16_less_leg_walking_rough",
+            "MoEVar": "MoEVar_less_leg_walking_rough",
             "residual": "Residual_less_leg_walking_rough",
             "component": "Component_less_leg_walking_rough"
         }[mode]
@@ -123,6 +129,7 @@ class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = {
             "scratch": "anymal_c_flat_leg_walking",
             "MoE": "MoE16_anymal_c_flat_leg_walking",
+            "MoEVar": "MoEVar_anymal_c_flat_leg_walking",
             "residual": "Residual_anymal_c_flat_leg_walking",
             "component": "Component_anymal_c_flat_leg_walking"
         }[mode]
@@ -173,6 +180,7 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
     experiment_name = {
             "scratch": "anymal_c_rough_leg_walking",
             "MoE": "MoE16_anymal_c_rough_leg_walking",
+            "MoEVar": "MoEVar_anymal_c_rough_leg_walking",
             "residual": "Residual_anymal_c_rough_leg_walking", 
             "component": "Component_anymal_c_rough_leg_walking"
         }[mode]
@@ -200,6 +208,7 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = {
             "scratch": "anymal_c_jump_flat",
             "MoE": "MoE16_anymal_c_jump_flat",
+            "MoEVar": "MoEVar_anymal_c_jump_flat",
             "residual": "Residual_anymal_c_jump_flat",
             "component": "Component_anymal_c_jump_flat"
         }[mode]
@@ -253,6 +262,7 @@ class AnymalJumpRoughPPORunnerCfg(AnymalJumpFlatPPORunnerCfg):
     experiment_name = {
             "scratch": "anymal_c_jump_rough",
             "MoE": "MoE16_anymal_c_jump_rough",    
+            "MoEVar": "MoEVar_anymal_c_jump_rough",
             "residual": "Residual_anymal_c_jump_rough",
             "component": "Component_anymal_c_jump_rough"
         }[mode]

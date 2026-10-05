@@ -1,0 +1,398 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+import sys
+sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+
+"""Script to train RL agent with RSL-RL -- MoE variant (block-diagonal KAE, moe_var).
+
+Same as train_moe.py except: the policy class is MoEVarActorCritic, the CRL helpers
+come from train_moe_var_CRL.py, and the KAE trainer receives diversity_coefficient
+from CRL_KAE_DIVERSITY_COEFFICIENT (set by train_moe_var_CRL.py).
+"""
+
+"""Launch Isaac Sim Simulator first."""
+ 
+import argparse
+import sys
+
+from isaaclab.app import AppLauncher
+
+# local imports
+import cli_args  # isort: skip
+
+# add argparse arguments
+parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument(
+    "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
+)
+parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument(
+    "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
+)
+parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
+# append RSL-RL cli arguments
+cli_args.add_rsl_rl_args(parser)
+# append AppLauncher cli args
+AppLauncher.add_app_launcher_args(parser)
+args_cli, hydra_args = parser.parse_known_args()
+
+# always enable cameras to record video
+if args_cli.video:
+    args_cli.enable_cameras = True
+
+# clear out sys.argv for Hydra
+sys.argv = [sys.argv[0]] + hydra_args
+
+# launch omniverse app
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+"""Check for minimum supported RSL-RL version."""
+
+import importlib.metadata as metadata
+import platform
+
+from packaging import version
+from less_leg_walking_1.tasks.direct.less_leg_walking_1.MoE_var import MoEVarActorCritic
+# # Make the class available in the runner module's namespace
+import rsl_rl.runners.on_policy_runner as runner_module
+runner_module.MoEVarActorCritic = MoEVarActorCritic
+
+# check minimum supported rsl-rl version
+RSL_RL_VERSION = "3.0.1"
+installed_version = metadata.version("rsl-rl-lib")
+if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
+    if platform.system() == "Windows":
+        cmd = [r".\isaaclab.bat", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
+    else:
+        cmd = ["./isaaclab.sh", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
+    print(
+        f"Please install the correct version of RSL-RL.\nExisting version is: '{installed_version}'"
+        f" and required version is: '{RSL_RL_VERSION}'.\nTo install the correct version, run:"
+        f"\n\n\t{' '.join(cmd)}\n"
+    )
+    exit(1)
+
+"""Rest everything follows."""
+
+import gymnasium as gym
+import os
+import time
+import torch
+from datetime import datetime, timezone
+
+import omni
+from rsl_rl.runners import DistillationRunner, OnPolicyRunner
+
+from isaaclab.envs import (
+    DirectMARLEnv,
+    DirectMARLEnvCfg,
+    DirectRLEnvCfg,
+    ManagerBasedRLEnvCfg,
+    multi_agent_to_single_agent,
+)
+from isaaclab.utils.dict import print_dict
+from isaaclab.utils.io import dump_pickle, dump_yaml
+
+from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper
+
+import isaaclab_tasks  # noqa: F401
+from isaaclab_tasks.utils import get_checkpoint_path
+from isaaclab_tasks.utils.hydra import hydra_task_config
+
+import less_leg_walking_1.tasks  # noqa: F401
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.deterministic = False
+torch.backends.cudnn.benchmark = False
+
+@hydra_task_config(args_cli.task, args_cli.agent)
+def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
+    # agent_cfg.max_iterations = 3
+    """Train with RSL-RL agent."""
+    # override configurations with non-hydra CLI arguments
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+
+    # Tag the run directory with the CRL session so concurrent trials stay distinguishable.
+    _crl_session = os.environ.get("CRL_SESSION_ID")
+    if _crl_session:
+        agent_cfg.run_name = (
+            f"{agent_cfg.run_name}_{_crl_session}" if getattr(agent_cfg, "run_name", "") else _crl_session
+        )
+
+    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    agent_cfg.max_iterations = (
+        args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
+    )
+
+    # set the environment seed
+    # note: certain randomizations occur in the environment initialization so we set the seed here
+    env_cfg.seed = agent_cfg.seed
+    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    # multi-gpu training configuration
+    if args_cli.distributed:
+        env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
+        agent_cfg.device = f"cuda:{app_launcher.local_rank}"
+
+        # set seed to have diversity in different threads
+        seed = agent_cfg.seed + app_launcher.local_rank
+        env_cfg.seed = seed
+        agent_cfg.seed = seed
+
+    # specify directory for logging experiments
+    log_root_path = os.path.join("logs", "task1", agent_cfg.experiment_name)
+    log_root_path = os.path.abspath(log_root_path)
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    # specify directory for logging runs: put each task's KAE-MoE run under its task folder
+    # log_dir = "KAE_MoE"
+    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
+    print(f"Exact experiment name requested from command line: {log_dir}")
+    if agent_cfg.run_name:
+        log_dir += f"_{agent_cfg.run_name}"
+    log_dir = os.path.join(log_root_path, log_dir)
+
+    # set the IO descriptors export flag if requested
+    if isinstance(env_cfg, ManagerBasedRLEnvCfg):
+        env_cfg.export_io_descriptors = args_cli.export_io_descriptors
+    else:
+        omni.log.warn(
+            "IO descriptors are only supported for manager based RL environments. No IO descriptors will be exported."
+        )
+    # set the log directory for the environment (works for all environment types)
+    env_cfg.log_dir = log_dir
+
+    # create isaac environment
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+
+    # convert to single-agent instance if required by the RL algorithm
+    if isinstance(env.unwrapped, DirectMARLEnv):
+        env = multi_agent_to_single_agent(env)
+
+    # save resume path before creating a new log_dir
+    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+
+    # wrap for video recording
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": os.path.join(log_dir, "videos", "train"),
+            "step_trigger": lambda step: step % args_cli.video_interval == 0,
+            "video_length": args_cli.video_length,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording videos during training.")
+        print_dict(video_kwargs, nesting=4)
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+    # wrap around environment for rsl-rl
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+
+    crl_mode = os.environ.get("CRL_MODE") == "1"
+    observation_logger = None
+
+    if crl_mode:
+        from train_moe_var_CRL import ObservationLogger
+
+        observation_logger = ObservationLogger(
+            env,
+            log_dir,
+        )
+
+# # DEBUG
+    
+    # # DEBUG
+    # print("Obs space:", env.observation_space)
+    # print("Obs low:", env.observation_space.low)
+    # print("Obs high:", env.observation_space.high)
+    # assert False
+    # create runner from rsl-rl
+    if agent_cfg.class_name == "OnPolicyRunner":
+        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    elif agent_cfg.class_name == "DistillationRunner":
+        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    else:
+        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+
+    env.unwrapped._policy_ref = getattr(runner.alg, "policy", None) or runner.alg.actor_critic
+
+    # rescale TensorBoard x-axis to cumulative gradient-update count for fair method comparison
+    cli_args.patch_tensorboard_gradient_steps(runner)
+
+    # log the MoE gate value (KAE vs MLP blend) to TensorBoard each iteration
+    _orig_log = runner.log
+
+    def _log_with_gate(locs, *log_args, **log_kwargs):
+        _orig_log(locs, *log_args, **log_kwargs)
+        policy = runner.alg.policy
+        if runner.writer is not None and hasattr(policy, "pop_gate_stats"):
+            mean_gate = policy.pop_gate_stats()
+            if mean_gate is not None:
+                runner.writer.add_scalar("Policy/mean_gate", mean_gate, locs["it"])
+
+    runner.log = _log_with_gate
+
+    print("policy class_name:", agent_cfg.policy.class_name)
+    print("runner class_name:", agent_cfg.class_name)
+
+    # write git state to logs
+    runner.add_git_repo_to_log(__file__)
+    # load the checkpoint
+    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+        # load previously trained model
+        runner.load(resume_path)
+
+    # dump the configuration into log-directory
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+
+    # run training
+    _w0 = next(p for m in [getattr(runner.alg, a) for a in dir(runner.alg) if isinstance(getattr(runner.alg, a, None), torch.nn.Module)] for p in m.parameters() if p.requires_grad).detach().clone()
+
+    _train_start = time.time()
+    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    _train_elapsed_s = time.time() - _train_start
+
+    observation_file = None
+
+    if crl_mode:
+        observation_file = observation_logger.save()
+
+        print(
+            "[CRL] Observations saved to:",
+            observation_file,
+        )
+
+    _elapsed_min = _train_elapsed_s / 60.0
+    _elapsed_h = _train_elapsed_s / 3600.0
+    print(f"[INFO] Training wall-time: {_elapsed_min:.1f} min  ({_elapsed_h:.2f} h)")
+    # Save timing summary alongside other params
+    try:
+        import yaml as _yaml
+        _timing = {
+            "walltime_seconds": float(_train_elapsed_s),
+            "walltime_minutes": float(_elapsed_min),
+            "walltime_hours": float(_elapsed_h),
+            "max_iterations": int(agent_cfg.max_iterations),
+            "start_utc": datetime.fromtimestamp(time.time() - _train_elapsed_s, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_utc": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        os.makedirs(os.path.join(log_dir, "params"), exist_ok=True)
+        with open(os.path.join(log_dir, "params", "timing.yaml"), "w") as _f:
+            _yaml.dump(_timing, _f, default_flow_style=False)
+        print(f"[INFO] Timing saved to: {os.path.join(log_dir, 'params', 'timing.yaml')}")
+    except Exception as _e:
+        print(f"[WARN] Could not save timing.yaml: {_e}")
+
+    sys.__stdout__.write(f"[LEARNING?] {torch.norm(_w0 - next(p for m in [getattr(runner.alg, a) for a in dir(runner.alg) if isinstance(getattr(runner.alg, a, None), torch.nn.Module)] for p in m.parameters() if p.requires_grad)).item() > 1e-5}\n")
+
+
+
+    # Save complete model with metadata
+    # Try different common attribute names for the model
+    if hasattr(runner.alg, 'actor_critic'):
+        model = runner.alg.actor_critic
+        print("[INFO]: Found model under 'actor_critic' attribute.")
+    elif hasattr(runner.alg, 'policy'):
+        model = runner.alg.policy
+        print("[INFO]: Found model under 'policy' attribute.")
+        print(f"[INFO]: Policy details: {model}")
+        print(f"[INFO]: model.actor: {model.actor}")
+    elif hasattr(runner.alg, 'actor'):
+        model = runner.alg.actor
+        print("[INFO]: Found model under 'actor' attribute.")
+    else:
+        print(f"Warning: Could not find model in runner.alg. Available attributes: {[attr for attr in dir(runner.alg) if not attr.startswith('_')]}")
+        model = None
+
+
+    complete_model_data = {
+        'actor': model.actor,
+        'critic': model.critic,
+        'obs_range': getattr(model, 'obs_range', None),
+        # 'optimizer_state': runner.alg.optimizer.state_dict() if hasattr(runner.alg, 'optimizer') else None,
+        # 'agent_config': agent_cfg,
+        # 'env_config': env_cfg,
+        # 'iteration': agent_cfg.max_iterations,
+        # 'model_state_dict': model.state_dict() if model is not None else None
+    }
+    print(f"[INFO]: obs_range: {complete_model_data['obs_range']}")
+    complete_model_path = os.path.join(log_dir, "complete_model_with_metadata.pth")
+    torch.save(complete_model_data, complete_model_path)
+    print(f"[INFO]: Complete model with metadata saved to: {complete_model_path}")
+
+    if crl_mode:
+        import importlib.util
+
+        kae_approx_file = os.environ[
+            "CRL_KAE_APPROX_FILE"
+        ]
+
+        module_spec = importlib.util.spec_from_file_location(
+            "crl_kae_approx_var",
+            kae_approx_file,
+        )
+
+        if (
+            module_spec is None
+            or module_spec.loader is None
+        ):
+            raise ImportError(
+                "Unable to load KAE_approx_var.py: "
+                + kae_approx_file
+            )
+
+        # The policy already imported this file under the same name; reuse that module so
+        # the KAE classes pickled into <task>_KAE.pth resolve to one definition.
+        if module_spec.name in sys.modules:
+            kae_module = sys.modules[module_spec.name]
+        else:
+            kae_module = importlib.util.module_from_spec(
+                module_spec
+            )
+
+            sys.modules[module_spec.name] = kae_module
+
+            module_spec.loader.exec_module(
+                kae_module
+            )
+
+        diversity_coefficient = float(os.environ["CRL_KAE_DIVERSITY_COEFFICIENT"])
+
+        kae_module.train_and_save_kae(
+            task_name=os.environ[
+                "CRL_TASK_NAME"
+            ],
+            policy=model,
+            observation_file=observation_file,
+            kae_directory=os.environ[
+                "CRL_KAE_DIRECTORY"
+            ],
+            device=agent_cfg.device,
+            diversity_coefficient=diversity_coefficient,
+        )
+
+    # close the simulator
+    env.close()
+
+
+if __name__ == "__main__":
+    # run the main function
+    torch.set_grad_enabled(True)
+    main()
+    # close sim app
+    simulation_app.close()
