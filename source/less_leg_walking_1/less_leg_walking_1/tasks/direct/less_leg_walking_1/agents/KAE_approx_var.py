@@ -1,32 +1,41 @@
 """KAE trainer for the MoE variant (moe_var).
 
-Differences from KAE_approx.py, and nothing else:
-  * K is a direct sum of real 2x2 blocks trained by gradient together with the
-    encoder/decoder (Lusch, Kutz & Brunton, Nat. Commun. 2018). The EDMD least-squares
-    refit after every batch is gone. Unit k owns latent coordinates (2k, 2k+1), so an
-    expert is a coordinate pair: no eigendecomposition, no eigenvector inverse, and no
-    duplicated conjugate-pair experts in the actor.
-  * One extra loss term, diversity_loss: the mean squared off-diagonal cosine between
-    the unit output functions B[:act_dim, pair_k] R_k^p z_k over the batch. Its weight
-    diversity_coefficient is 0.0 unless given, in which case the term is only logged.
-Data generation, the other losses, the checkpoint layout and the logs are unchanged.
-The dense-K class is kept so KAEs saved by KAE_approx.py (e.g. the original task's) still load.
+Differences from KAE_approx.py:
+  * K is a direct sum of real BLOCK_SIZE x BLOCK_SIZE blocks trained by gradient together with
+    the encoder/decoder (Lusch, Kutz & Brunton, Nat. Commun. 2018); no EDMD refit. Unit k owns
+    latent coordinates [k*BLOCK_SIZE, (k+1)*BLOCK_SIZE) and is one mode: its action-space output
+    is B[:act_dim, block_k] R_k^p z_k, and the units sum to decoder(K^p z)[:act_dim] exactly.
+  * An MLP observer (ModeObserver) predicts each unit's standardised output from the other units'
+    standardised outputs. The observer minimises that error; the KAE receives the reversed
+    gradient and maximises it, so the unit outputs are pushed to be mutually unpredictable
+    (wide span). One optimizer, one backward, no schedule. Standardising first (as the repo's
+    task adversary does) removes the scale route to a large error.
+Encoder (Tanh MLP), decoder (bias-free linear), K blocks, observer and every size below are
+defined in this file only. Data generation, the other losses, checkpoint layout and logs are
+unchanged from KAE_approx.py. Dense KAEs saved by KAE_approx.py still load (classes resolved
+from the sibling file).
 """
 
 from pathlib import Path
 import csv
+import importlib.util
 import json
 import os
 import random
 import sys
 import time
-import types
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal
 from torch.utils.data import DataLoader
+
+# ---- KAE-side sizes and constants (the only place they are set) ----------------------------
+BLOCK_SIZE = 2                   # real block size of K; must divide observable_dim
+OBSERVER_HIDDEN_DIMS = [64, 64]  # ModeObserver MLP hidden widths (ELU)
+OBSERVER_LOSS_WEIGHT = 1.0       # weight of the observer error in the KAE loss
+# -------------------------------------------------------------------------------------------
 
 
 class Encoder_walk(nn.Module):
@@ -57,52 +66,29 @@ class Decoder(nn.Module):
         return self.linear(x)
 
 
-class KoopmanAutoencoder_walk(nn.Module):
-    def __init__(self, state_dim, hidden_dim, observable_dim, device):
-        super().__init__()
-        self.encoder = Encoder_walk(state_dim, hidden_dim, observable_dim)
-        self.decoder = Decoder(observable_dim, state_dim)
-        self.state_dim = state_dim
-        self.hidden_dim = hidden_dim
-        self.observable_dim = observable_dim
-        self.K = torch.randn(observable_dim, observable_dim, device=device)
-
-    def forward(self, x):
-        z = self.encoder(x)
-        z_next = torch.matmul(z, self.K.T)
-        y_hat = self.decoder(z_next)
-        x_hat = self.decoder(z)
-        return x_hat, z, y_hat
-
-    def compute_koopman_operator(self, latent_X, latent_Y, device):
-        del device
-        latent_X = latent_X.view(-1, latent_X.size(-1)).T
-        latent_Y = latent_Y.view(-1, latent_Y.size(-1)).T
-        self.K = latent_Y @ torch.linalg.pinv(latent_X, rcond=1e-5)
-
-
 class KoopmanAutoencoder_walk_var(nn.Module):
-    """Same encoder/decoder as KoopmanAutoencoder_walk with a block-diagonal, trainable K.
+    """Encoder_walk + Decoder with a block-diagonal, trainable K.
 
-    Row convention as before: z_next = z @ K.T. blocks[k] is the 2x2 block of K itself,
-    K = blockdiag(blocks[0], ..., blocks[n_units-1]); unit k reads coordinates (2k, 2k+1).
-    Each block has 4 free entries (a conjugate pair [[a, b], [-b, a]], a real pair
-    diag(l1, l2), or any real 2x2 restriction), initialised to the identity.
+    Row convention as in KAE_approx.py: z_next = z @ K.T. blocks[k] is the k-th block of K itself,
+    K = blockdiag(blocks[0], ..., blocks[n_units-1]), each block_size x block_size, initialised to
+    the identity. Unit k reads latent coordinates [k*block_size, (k+1)*block_size).
     """
 
-    def __init__(self, state_dim, hidden_dim, observable_dim, device):
+    def __init__(self, state_dim, hidden_dim, observable_dim, device, block_size=BLOCK_SIZE):
         super().__init__()
-        if observable_dim % 2:
-            raise ValueError(f"observable_dim must be even for 2x2 blocks, got {observable_dim}.")
+        if block_size < 1 or observable_dim % block_size:
+            raise ValueError(
+                f"observable_dim ({observable_dim}) must be divisible by block_size ({block_size})."
+            )
         del device  # parameters follow .to(device) like every other module
         self.encoder = Encoder_walk(state_dim, hidden_dim, observable_dim)
         self.decoder = Decoder(observable_dim, state_dim)
         self.state_dim = state_dim
         self.hidden_dim = hidden_dim
         self.observable_dim = observable_dim
-        self.unit_size = 2
-        self.n_units = observable_dim // 2
-        self.blocks = nn.Parameter(torch.eye(2).repeat(self.n_units, 1, 1))
+        self.block_size = block_size
+        self.n_units = observable_dim // block_size
+        self.blocks = nn.Parameter(torch.eye(block_size).repeat(self.n_units, 1, 1))
 
     @property
     def K(self):
@@ -110,21 +96,19 @@ class KoopmanAutoencoder_walk_var(nn.Module):
         return torch.block_diag(*self.blocks)
 
     def evolve(self, z, steps):
-        """z @ K.T applied `steps` times as batched 2x2 products (no dense matmul)."""
-        pairs = z.reshape(z.shape[0], self.n_units, self.unit_size)
+        """z @ K.T applied `steps` times as batched block products."""
+        units = z.reshape(z.shape[0], self.n_units, self.block_size)
         for _ in range(int(steps)):
-            pairs = torch.einsum("nki,kji->nkj", pairs, self.blocks)
-        return pairs.reshape(z.shape[0], -1)
+            units = torch.einsum("nki,kji->nkj", units, self.blocks)
+        return units.reshape(z.shape[0], -1)
 
     def unit_outputs(self, z, act_dim, p):
-        """Expert outputs [N, n_units, act_dim]: unit k gives B[:act_dim, pair_k] (R_k^p z_k).
-
-        Summing over units reproduces decoder(z @ (K^p).T)[:, :act_dim] exactly, so the
-        KMD reconstruction identity holds by construction.
+        """Mode outputs [N, n_units, act_dim]: unit k gives B[:act_dim, block_k] (R_k^p z_k).
+        Summing over units reproduces decoder(z @ (K^p).T)[:, :act_dim] exactly.
         """
-        evolved = self.evolve(z, p).reshape(z.shape[0], self.n_units, self.unit_size)
+        evolved = self.evolve(z, p).reshape(z.shape[0], self.n_units, self.block_size)
         weight = self.decoder.linear.weight[:act_dim]  # [act_dim, d]
-        weight = weight.reshape(act_dim, self.n_units, self.unit_size)
+        weight = weight.reshape(act_dim, self.n_units, self.block_size)
         return torch.einsum("nki,aki->nka", evolved, weight)
 
     def forward(self, x):
@@ -135,16 +119,70 @@ class KoopmanAutoencoder_walk_var(nn.Module):
         return x_hat, z, y_hat
 
 
+class _GradReverse(torch.autograd.Function):
+    """Identity forward, negated gradient backward (gradient reversal layer)."""
+
+    @staticmethod
+    def forward(ctx, x):
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad):
+        return -grad
+
+
+def standardised(units):
+    """Per unit and per action dim, zero mean / unit variance over the batch."""
+    mean = units.mean(dim=0, keepdim=True)
+    std = units.std(dim=0, keepdim=True)
+    return (units - mean) / (std + 1e-6)
+
+
+class ModeObserver(nn.Module):
+    """One MLP per unit: predicts the standardised output of unit k from the standardised outputs
+    of the other units. Its own loss is the prediction MSE (it minimises); the KAE sees the same
+    MSE through _GradReverse (it maximises). n_units < 2 gives no observer (loss 0).
+    """
+
+    def __init__(self, n_units, act_dim, hidden_dims):
+        super().__init__()
+        self.n_units = n_units
+        self.heads = nn.ModuleList()
+        if n_units < 2:
+            return
+        for _ in range(n_units):
+            layers = []
+            width = (n_units - 1) * act_dim
+            for hidden in hidden_dims:
+                layers.append(nn.Linear(width, hidden))
+                layers.append(nn.ELU())
+                width = hidden
+            layers.append(nn.Linear(width, act_dim))
+            self.heads.append(nn.Sequential(*layers))
+
+    def forward(self, units):
+        """units: [N, n_units, act_dim] mode outputs (raw). Returns mean prediction MSE."""
+        if self.n_units < 2:
+            return units.sum() * 0.0
+        units = standardised(_GradReverse.apply(units))
+        errors = []
+        for k, head in enumerate(self.heads):
+            others = torch.cat([units[:, :k], units[:, k + 1 :]], dim=1).reshape(units.shape[0], -1)
+            errors.append(nn.functional.mse_loss(head(others), units[:, k]))
+        return torch.stack(errors).mean()
+
+
 def _install_legacy_autoencoder_module():
-    module = types.ModuleType("Autoencoder")
-    module.Encoder_walk = Encoder_walk
-    module.Decoder = Decoder
-    module.KoopmanAutoencoder_walk = KoopmanAutoencoder_walk
-    module.KoopmanAutoencoder_walk_var = KoopmanAutoencoder_walk_var
-    sys.modules["Autoencoder"] = module
-    sys.modules["less_leg_walking_1.tasks.direct.less_leg_walking_1.Autoencoder"] = module
-    # KAEs saved by the A pipeline are pickled under the module name train_moe.py used.
-    sys.modules.setdefault("crl_kae_approx", module)
+    """Dense KAEs saved by the A pipeline (e.g. the original task's) pickle their classes under
+    'crl_kae_approx' or 'Autoencoder'. Resolve them from the sibling KAE_approx.py instead of
+    duplicating the dense class here."""
+    if "crl_kae_approx" not in sys.modules:
+        legacy_file = Path(__file__).with_name("KAE_approx.py")
+        spec = importlib.util.spec_from_file_location("crl_kae_approx", legacy_file)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["crl_kae_approx"] = module
+        spec.loader.exec_module(module)
+    sys.modules["crl_kae_approx"]._install_legacy_autoencoder_module()
 
 
 def load_kae(checkpoint_file, device):
@@ -203,6 +241,7 @@ def compute_l_kae(
     inner,
     batch_size,
     action_dim,
+    observer,
 ):
     del aug_output, aug_input_all
 
@@ -248,34 +287,8 @@ def compute_l_kae(
         kae,
     )
     loss_kae = c1 * recon_loss + c2 * state_pred_loss + c3 * latent_pred_loss
-    diversity_loss = unit_diversity_loss(kae, latent_x, action_dim, p)
-    return loss_kae, action_loss, recon_loss, state_pred_loss, latent_pred_loss, diversity_loss
-
-
-def unit_diversity_loss(kae, latent_x, action_dim, p):
-    """Mean squared off-diagonal cosine between the unit output functions on this batch.
-
-    G_kl = <m_k, m_l> / (||m_k|| ||m_l||) with the inner product over samples x action dims;
-    the loss is mean_{k != l} G_kl^2, so it is 0 for mutually orthogonal expert functions
-    and does not depend on n_units. A unit with ~zero output has ~zero cosine with every
-    other unit, so this term does not penalise dead units; watch unit_energy_share for that.
-    """
-    units = kae.unit_outputs(latent_x, action_dim, p)             # [N, n_units, act_dim]
-    flat = units.transpose(0, 1).reshape(units.shape[1], -1)       # [n_units, N * act_dim]
-    gram = flat @ flat.T
-    norms = torch.sqrt(torch.diag(gram)).clamp_min(1e-8)
-    cosine = gram / (norms[:, None] * norms[None, :])
-    off_diagonal = cosine - torch.diag(torch.diag(cosine))
-    count = units.shape[1] * (units.shape[1] - 1)
-    return off_diagonal.square().sum() / count
-
-
-def unit_energy_share(kae, latent_x, action_dim, p):
-    """Fraction of total expert output energy carried by each unit (diagnostic only)."""
-    with torch.no_grad():
-        units = kae.unit_outputs(latent_x, action_dim, p)
-        energy = units.square().sum(dim=(0, 2))
-        return (energy / energy.sum().clamp_min(1e-12)).cpu().tolist()
+    observer_loss = observer(kae.unit_outputs(latent_x, action_dim, p))
+    return loss_kae, action_loss, recon_loss, state_pred_loss, latent_pred_loss, observer_loss
 
 
 def _set_deterministic_seed(seed):
@@ -402,7 +415,7 @@ def train_and_save_kae(
     hidden_dim=256,
     sample_count=15000,
     batch_size=2048,
-    num_epochs=7500,#20000,
+    num_epochs=20000,#20000,
     learning_rate=1e-4,
     kae_coefficient=0.1,
     action_coefficient=0.9,
@@ -412,7 +425,9 @@ def train_and_save_kae(
     p=1,
     seed=777,
     log_directory=None,
-    diversity_coefficient=0.0,
+    block_size=BLOCK_SIZE,
+    observer_hidden_dims=OBSERVER_HIDDEN_DIMS,
+    observer_weight=OBSERVER_LOSS_WEIGHT,
 ):
     device = torch.device(device)
     observation_file = Path(observation_file)
@@ -424,8 +439,12 @@ def train_and_save_kae(
         raise ValueError(f"p must be at least 1, got {p}.")
     if batch_size % p != 0:
         raise ValueError(f"batch_size must be divisible by p: batch_size={batch_size}, p={p}.")
-    if diversity_coefficient < 0:
-        raise ValueError(f"diversity_coefficient must be nonnegative, got {diversity_coefficient}.")
+    if block_size < 1 or observable_dim % block_size:
+        raise ValueError(
+            f"observable_dim ({observable_dim}) must be divisible by block_size ({block_size})."
+        )
+    if observer_weight < 0:
+        raise ValueError(f"observer_weight must be nonnegative, got {observer_weight}.")
 
     # kae_directory.mkdir(parents=True, exist_ok=True)
     # _set_deterministic_seed(seed)
@@ -473,8 +492,12 @@ def train_and_save_kae(
         hidden_dim=hidden_dim,
         observable_dim=observable_dim,
         device=device,
+        block_size=block_size,
     ).to(device)
-    optimizer = torch.optim.Adam(kae.parameters(), lr=learning_rate)
+    observer = ModeObserver(kae.n_units, action_dim, observer_hidden_dims).to(device)
+    optimizer = torch.optim.Adam(
+        list(kae.parameters()) + list(observer.parameters()), lr=learning_rate
+    )
 
     # kae.train()
     # import time
@@ -482,11 +505,12 @@ def train_and_save_kae(
     # for epoch in range(num_epochs):
 
     kae.train()
+    observer.train()
     start = time.perf_counter()
     history_handle = history_file.open("w", newline="", encoding="utf-8")
     history_writer = csv.writer(history_handle)
     history_writer.writerow(
-        ["epoch", "loss", "loss_kae", "action", "recon", "state", "latent", "diversity",
+        ["epoch", "loss", "loss_kae", "action", "recon", "state", "latent", "observer",
         "elapsed_s"]
     )
     for epoch in range(num_epochs):
@@ -496,10 +520,10 @@ def train_and_save_kae(
         running_recon_loss = 0.0
         running_state_loss = 0.0
         running_latent_loss = 0.0
-        running_diversity_loss = 0.0
+        running_observer_loss = 0.0
 
         for inner, (aug_input, aug_output) in enumerate(train_loader):
-            loss_kae, loss_action, recon_loss, state_loss, latent_loss, diversity_loss = compute_l_kae(
+            loss_kae, loss_action, recon_loss, state_loss, latent_loss, observer_loss = compute_l_kae(
                 kae,
                 aug_input,
                 aug_output,
@@ -513,11 +537,13 @@ def train_and_save_kae(
                 inner,
                 batch_size,
                 action_dim,
+                observer,
             )
+            # observer_loss enters once: the observer descends it, the KAE ascends it (_GradReverse).
             loss = (
                 kae_coefficient * loss_kae
                 + action_coefficient * loss_action
-                + diversity_coefficient * diversity_loss
+                + observer_weight * observer_loss
             )
 
             if not torch.isfinite(loss):
@@ -527,7 +553,9 @@ def train_and_save_kae(
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(kae.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(
+                list(kae.parameters()) + list(observer.parameters()), max_norm=1.0
+            )
             optimizer.step()
 
             running_loss += loss.detach().cpu().item()
@@ -536,7 +564,7 @@ def train_and_save_kae(
             running_recon_loss += recon_loss.detach().cpu().item()
             running_state_loss += state_loss.detach().cpu().item()
             running_latent_loss += latent_loss.detach().cpu().item()
-            running_diversity_loss += diversity_loss.detach().cpu().item()
+            running_observer_loss += observer_loss.detach().cpu().item()
 
             # No EDMD refit: the block-diagonal K is a parameter updated by optimizer.step().
             if not torch.isfinite(kae.blocks).all():
@@ -567,7 +595,7 @@ def train_and_save_kae(
             running_recon_loss / num_batches,
             running_state_loss / num_batches,
             running_latent_loss / num_batches,
-            running_diversity_loss / num_batches,
+            running_observer_loss / num_batches,
             time.perf_counter() - start,
         ])
         if epoch == 0 or (epoch + 1) % 100 == 0:
@@ -580,11 +608,12 @@ def train_and_save_kae(
                 f"recon={running_recon_loss / num_batches:.6f} "
                 f"state={running_state_loss / num_batches:.6f} "
                 f"latent={running_latent_loss / num_batches:.6f} "
-                f"diversity={running_diversity_loss / num_batches:.6f}"
+                f"observer={running_observer_loss / num_batches:.6f}"
             )
 
     history_handle.close()
     kae.eval()
+    observer.eval()
 
     # Evaluate reconstruction on the real rollout observations, not on the sampled
     # training data, so the number reflects states the policy actually visits.
@@ -594,8 +623,7 @@ def train_and_save_kae(
         real_pad = torch.ones(eval_count, padded_dimension - obs_dim, device=device)
         real_aug = torch.cat([real, real_pad], dim=1)
         real_hat, real_latent, _ = kae(real_aug)
-        eval_diversity = unit_diversity_loss(kae, real_latent, action_dim, p).item()
-        eval_energy_share = unit_energy_share(kae, real_latent, action_dim, p)
+        eval_observer = observer(kae.unit_outputs(real_latent, action_dim, p)).item()
         recon_mse = nn.MSELoss()(real_hat, real_aug).item()
         recon_rel = (torch.norm(real_hat - real_aug) / torch.norm(real_aug)).item()
         eigenvalues = torch.linalg.eigvals(kae.K)
@@ -610,6 +638,11 @@ def train_and_save_kae(
         "sample_count": sample_count,
         "batch_size": batch_size,
         "observable_dim": observable_dim,
+        "kae_type": "block_diagonal",
+        "block_size": block_size,
+        "n_units": kae.n_units,
+        "observer_hidden_dims": list(observer_hidden_dims),
+        "observer_weight": observer_weight,
         "padded_dimension": padded_dimension,
         "hidden_dim": hidden_dim,
         "obs_dim": int(obs_dim),
@@ -622,19 +655,14 @@ def train_and_save_kae(
         "final_recon_loss": running_recon_loss / num_batches,
         "final_state_loss": running_state_loss / num_batches,
         "final_latent_loss": running_latent_loss / num_batches,
-        "final_diversity_loss": running_diversity_loss / num_batches,
-        "diversity_coefficient": diversity_coefficient,
-        "kae_type": "block_diagonal",
-        "n_units": kae.n_units,
-        "eval_diversity_loss_real_obs": eval_diversity,
-        "eval_unit_energy_share_real_obs": eval_energy_share,
+        "final_observer_loss": running_observer_loss / num_batches,
+        "eval_observer_loss_real_obs": eval_observer,
         "eval_recon_mse_real_obs": recon_mse,
         "eval_recon_relative_error": recon_rel,
         "elapsed_seconds": elapsed,
     }
 
     kae = kae.cpu()
-    _install_legacy_autoencoder_module()
     output_file = kae_directory / f"{task_name}_KAE.pth"
     torch.save(kae, output_file)
     summary["kae_file"] = str(output_file)
@@ -644,6 +672,6 @@ def train_and_save_kae(
     print(f"[KAE] Saved   : {output_file}")
     print(f"[KAE] History : {history_file}")
     print(f"[KAE] Summary : {summary_file}")
-    print(f"[KAE] eval  recon_rel={recon_rel:.4f}  rho(K)={spectral_radius:.4f}  diversity={eval_diversity:.4f}  beta={diversity_coefficient}")
+    print(f"[KAE] eval  recon_rel={recon_rel:.4f}  rho(K)={spectral_radius:.4f}  observer={eval_observer:.4f}")
     print(f"Elapsed time for training KAE: {elapsed:.4f} seconds")
     return output_file

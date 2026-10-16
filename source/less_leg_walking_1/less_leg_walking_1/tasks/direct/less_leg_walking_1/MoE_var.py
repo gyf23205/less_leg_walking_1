@@ -1,12 +1,11 @@
 """MoE actor-critic for the variant pipeline (moe_var).
 
-Identical to MoE.py except for how experts are produced from a KAE:
-  * a block-diagonal KAE (KAE_approx_var.KoopmanAutoencoder_walk_var) yields one expert per
-    2x2 unit through kae.unit_outputs -- no eigendecomposition in forward();
-  * a dense legacy KAE (e.g. the original task's) still goes through utils.get_experts_outputs,
-    so mixed sessions load. Branch widths follow the per-KAE expert count instead of
-    observable_dim.
-Gate, per-KAE weight branches with unit L1 budget, KAE router and residual MLP are unchanged.
+Same as MoE.py except how experts are produced from a KAE. A block-diagonal KAE
+(KAE_approx_var.KoopmanAutoencoder_walk_var) gives one expert per real block of K through
+kae.unit_outputs -- no eigendecomposition in forward(). A dense legacy KAE (e.g. the
+original task's) still goes through utils.get_experts_outputs, so mixed sessions load.
+Branch widths follow the per-KAE expert count (kae.n_units). RL-side sizes live in MoEVarCfg
+below; everything about the KAE (encoder, decoder, block K, observer) lives in KAE_approx_var.py.
 """
 
 import datetime
@@ -24,14 +23,16 @@ class MoEVarCfg(RslRlPpoActorCriticCfg):
     padded_dim: int = 256
     observable_dim: int = 16
     actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
-    critic_hidden_dims: list[int] = [512, 256, 128] # FIXED, DO NOT TOUCH
+    # actor_hidden_dims: list[int] = [128, 64, 32]
+    critic_hidden_dims: list[int] = [512, 256, 128]
     gating_hidden_dims: list[int] = [32] #[64, 32] # gating network
     weight_hidden_dims: list[int] = [32] # wieght network
     weight_router_hidden_dims: list[int] = [128] # weight router network
+    # critic_hidden_dims: list[int] = [1024, 512, 256, 128]
     
 
     # Experiment log    
-    # MoE, not MoEVar
+    # Done
                             #  res             g          g_bias    w_bias    weight          wegiht_router                NOTE
     # 2026-08-17_12-04-15   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32, 16]        [128, 64]                    Stack makes learning slow as task num grows
     # 2026-08-17_21-19-27   # [256, 128, 64]   [32]       [1.0]     [1.0]     [32]            [256, 128]                   Overall good, SUCCESS
@@ -52,6 +53,15 @@ class MoEVarCfg(RslRlPpoActorCriticCfg):
     activation: str = "elu"
     init_noise_std: float = 1.0  # ADD THIS - match train_scratch
 
+    # Set explicitly (don't reference other fields)
+    # num_actor_obs: int = 256  # Match padded_dim or your obs space
+    # num_critic_obs: int = 256
+    # num_actions: int = 9
+    
+    # obs_groups = {
+    #     "policy": ["policy"],
+    #     "critic": ["policy"],
+    # }
 
 import torch
 import torch.nn as nn
@@ -78,8 +88,8 @@ sys.modules.setdefault(
 )
 
 def _load_kae_approx_module():
-    """Import KAE_approx_var.py the same way train_moe_var.py does, under the same module name,
-    so pickled KAE classes resolve. CRL runs pass the file through CRL_KAE_APPROX_FILE;
+    """Import KAE_approx_var.py under the module name train_moe_var.py uses, so KAE classes
+    pickled into <task>_KAE.pth resolve. CRL runs pass the file via CRL_KAE_APPROX_FILE;
     standalone runs use the copy next to this file."""
     kae_approx_file = os.environ.get("CRL_KAE_APPROX_FILE")
     if not kae_approx_file:
@@ -97,7 +107,7 @@ def _load_kae_approx_module():
 
 
 def _expert_count(kae):
-    """Experts contributed by one KAE: 2x2 units for a block KAE, observable_dim for a dense one."""
+    """Experts one KAE contributes: n_units for a block KAE, observable_dim for a dense one."""
     if hasattr(kae, "n_units"):
         return int(kae.n_units)
     return int(kae.K.shape[0])
@@ -381,7 +391,7 @@ class MoEVarActorCritic(ActorCritic):
     
 
     def _expert_outputs(self, kae, latent_z):
-        """[B, n_experts_of_kae, act_dim]; block KAE -> unit outputs, dense KAE -> KMD modes."""
+        """[B, experts_of_kae, act_dim]: block KAE -> unit outputs, dense KAE -> KMD modes."""
         if hasattr(kae, "unit_outputs"):
             return kae.unit_outputs(latent_z, self.act_dim, self.p)
         return get_experts_outputs(kae, latent_z, self.p, self.act_dim)

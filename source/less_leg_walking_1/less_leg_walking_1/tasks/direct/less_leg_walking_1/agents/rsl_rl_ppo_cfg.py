@@ -234,6 +234,10 @@ class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     if mode == "MoE":
         policy = MoECfg()
 
+    # USE THIS FOR MoE_var
+    if mode == "MoEVar":
+        policy = MoEVarCfg()
+
     # USE THIS FOR COMPONENT
     if mode == "component":
         policy = CompoCfg()

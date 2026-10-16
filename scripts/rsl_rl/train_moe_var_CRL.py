@@ -1,11 +1,7 @@
 # NOTE -- MoE variant (moe_var) CRL driver.
-# Same as train_moe_CRL.py except:
-#   * runs train_moe_var.py and passes agents/KAE_approx_var.py as the KAE trainer,
-#   * sessions live under KAEs/sessions_var/ so they never mix with the A pipeline,
-#   * --diversity-coefficient (required) is forwarded as CRL_KAE_DIVERSITY_COEFFICIENT,
-#   * --original-kae can point at a block-diagonal KAE of the original task; by default the
-#     shared dense KAEs/<ORIGINAL_TASK>_KAE.pth is used (MoE_var.py loads both kinds).
-#   * LOG_ROOT matches train_moe.py / train_moe_var.py (logs/task1).
+# Same as train_moe_CRL.py except: runs train_moe_var.py, passes agents/KAE_approx_var.py as the
+# KAE trainer, and keeps its sessions under KAEs/sessions_var/ so they never mix with the A pipeline.
+# The original task's KAE is the shared dense KAEs/<ORIGINAL_TASK>_KAE.pth (MoE_var.py loads both kinds).
 #
 # TO do:
 # 1. CRL continuation: make a certain step is reproducible, our be continued
@@ -44,22 +40,14 @@ TRAIN_TASKS = [ # train in this order
 TASK_DIRECTORY = Path("source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1")
 KAE_ROOT = TASK_DIRECTORY / "KAEs"            # shared; holds the original task KAE only
 SESSION_ROOT = KAE_ROOT / "sessions_var"      # per-session artifacts of the variant
-LOG_ROOT = Path("logs/rsl_rl")                 # where train_moe_var.py writes runs
+LOG_ROOT = Path("logs/rsl_rl")
 KAE_APPROX_FILE = TASK_DIRECTORY / "agents" / "KAE_approx_var.py"
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 USAGE = """\
-train_moe_var_CRL.py --diversity-coefficient BETA [--session ID] [--resume | --start-from N|TASK]
-           [--original-kae FILE] [--list-sessions] [--crl-help]
+train_moe_var_CRL.py [--session ID] [--resume | --start-from N|TASK] [--list-sessions] [--crl-help]
            [... every other argument is forwarded to train_moe_var.py ...]
-
-  --diversity-coefficient BETA
-                     Weight of the unit-diversity loss in KAE_approx_var.py. 0 trains the
-                     block-diagonal KAE without it (the term is still logged).
-  --original-kae FILE
-                     KAE of the original task to seed the session with. Default:
-                     KAEs/<ORIGINAL_TASK>_KAE.pth (dense, shared with the A pipeline).
 
   --session ID       Session name. Defaults to sYYYYmmdd_HHMMSS.
                      KAEs, policies, observations and logs are kept per session,
@@ -279,8 +267,6 @@ def parse_arguments():
     parser.add_argument("--start-from", default=None)
     parser.add_argument("--list-sessions", action="store_true")
     parser.add_argument("--crl-help", action="store_true")
-    parser.add_argument("--diversity-coefficient", type=float, default=None)
-    parser.add_argument("--original-kae", default=None)
     return parser.parse_known_args()
 
 # --------------------------------------------------------------------------------------
@@ -288,9 +274,7 @@ def parse_arguments():
 # --------------------------------------------------------------------------------------
 def get_run_directories():
     run_directories = set()
-    for model_file in Path("logs/task1").rglob(
-        "complete_model_with_metadata.pth"
-    ):
+    for model_file in LOG_ROOT.rglob("complete_model_with_metadata.pth"):
         run_directories.add(model_file.parent)
     return run_directories
 
@@ -334,11 +318,6 @@ def main():
         list_sessions()
         return
 
-    if arguments.diversity_coefficient is None:
-        raise ValueError("--diversity-coefficient is required (use 0 for the block KAE without the term).")
-    if arguments.diversity_coefficient < 0:
-        raise ValueError(f"--diversity-coefficient must be nonnegative: {arguments.diversity_coefficient}")
-
     SESSION_ROOT.mkdir(parents=True, exist_ok=True)
 
     session_id = arguments.session or datetime.now().strftime("s%Y%m%d_%H%M%S")
@@ -358,11 +337,7 @@ def main():
     kae_log_directory.mkdir(parents=True, exist_ok=True)
 
     # Copy the original KAE into the session so the session is self-contained.
-    original_source = (
-        Path(arguments.original_kae)
-        if arguments.original_kae
-        else KAE_ROOT / f"{ORIGINAL_TASK}_KAE.pth"
-    )
+    original_source = KAE_ROOT / f"{ORIGINAL_TASK}_KAE.pth"
     original_target = kae_directory / f"{ORIGINAL_TASK}_KAE.pth"
     if not original_target.is_file():
         if not original_source.is_file():
@@ -384,9 +359,6 @@ def main():
             "train_tasks": list(TRAIN_TASKS),
             "completed_tasks": [ORIGINAL_TASK],
             "runs": {},
-            "variant": "moe_var",
-            "diversity_coefficient": arguments.diversity_coefficient,
-            "original_kae": str(original_source),
         }
 
     start_index = resolve_start_index(state, arguments.start_from)

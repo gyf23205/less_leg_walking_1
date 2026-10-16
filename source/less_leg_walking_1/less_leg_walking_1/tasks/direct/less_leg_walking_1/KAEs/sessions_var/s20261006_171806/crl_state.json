@@ -1,0 +1,29 @@
+{
+  "session_id": "s20261006_171806",
+  "created_at": "2026-10-06T17:18:06",
+  "original_task": "Less-AnymalC-Rough-Walking-Direct-v1",
+  "train_tasks": [
+    "Less-AnymalC-Jump-Direct-v1",
+    "Less-AnymalC-Flat-Walking-Direct-v1",
+    "Less-Leg-Flat-Walking-Direct-v1",
+    "Less-AnymalC-Jump-Rough-Direct-v1",
+    "Less-Leg-Rough-Walking-Direct-v1"
+  ],
+  "completed_tasks": [
+    "Less-AnymalC-Rough-Walking-Direct-v1",
+    "Less-AnymalC-Jump-Direct-v1",
+    "Less-AnymalC-Flat-Walking-Direct-v1",
+    "Less-Leg-Flat-Walking-Direct-v1",
+    "Less-AnymalC-Jump-Rough-Direct-v1"
+  ],
+  "runs": {
+    "Less-AnymalC-Jump-Direct-v1": "logs/rsl_rl/MoEVar_anymal_c_jump_flat/2026-10-06_17-18-11_s20261006_171806",
+    "Less-AnymalC-Flat-Walking-Direct-v1": "logs/rsl_rl/MoEVar_anymal_c_flat_leg_walking/2026-10-06_17-54-08_s20261006_171806",
+    "Less-Leg-Flat-Walking-Direct-v1": "logs/rsl_rl/MoEVar_less_leg_walking_flat/2026-10-06_18-59-46_s20261006_171806",
+    "Less-AnymalC-Jump-Rough-Direct-v1": "logs/rsl_rl/MoEVar_anymal_c_jump_rough/2026-10-06_20-03-34_s20261006_171806"
+  },
+  "train_arguments": [
+    "--headless"
+  ],
+  "updated_at": "2026-10-06T21:18:38"
+}

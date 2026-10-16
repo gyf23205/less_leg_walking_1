@@ -1,0 +1,19 @@
+{
+  "session_id": "s20261006_171222",
+  "created_at": "2026-10-06T17:12:22",
+  "original_task": "Less-AnymalC-Rough-Walking-Direct-v1",
+  "train_tasks": [
+    "Less-AnymalC-Jump-Direct-v1",
+    "Less-AnymalC-Flat-Walking-Direct-v1",
+    "Less-Leg-Flat-Walking-Direct-v1",
+    "Less-AnymalC-Jump-Rough-Direct-v1",
+    "Less-Leg-Rough-Walking-Direct-v1"
+  ],
+  "completed_tasks": [
+    "Less-AnymalC-Rough-Walking-Direct-v1"
+  ],
+  "runs": {},
+  "train_arguments": [
+    "--headless"
+  ]
+}

@@ -8,9 +8,8 @@ sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
 
 """Script to train RL agent with RSL-RL -- MoE variant (block-diagonal KAE, moe_var).
 
-Same as train_moe.py except: the policy class is MoEVarActorCritic, the CRL helpers
-come from train_moe_var_CRL.py, and the KAE trainer receives diversity_coefficient
-from CRL_KAE_DIVERSITY_COEFFICIENT (set by train_moe_var_CRL.py).
+Same as train_moe.py except: the policy class is MoEVarActorCritic, the CRL helpers come
+from train_moe_var_CRL.py, and the KAE trainer is agents/KAE_approx_var.py.
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -371,8 +370,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 kae_module
             )
 
-        diversity_coefficient = float(os.environ["CRL_KAE_DIVERSITY_COEFFICIENT"])
-
         kae_module.train_and_save_kae(
             task_name=os.environ[
                 "CRL_TASK_NAME"
@@ -383,7 +380,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 "CRL_KAE_DIRECTORY"
             ],
             device=agent_cfg.device,
-            diversity_coefficient=diversity_coefficient,
         )
 
     # close the simulator
