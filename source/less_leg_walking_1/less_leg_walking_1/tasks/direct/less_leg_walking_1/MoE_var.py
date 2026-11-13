@@ -24,7 +24,7 @@ class MoEVarCfg(RslRlPpoActorCriticCfg):
     observable_dim: int = 16
     actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
     # actor_hidden_dims: list[int] = [128, 64, 32]
-    critic_hidden_dims: list[int] = [512, 256, 128]
+    critic_hidden_dims: list[int] = [512, 256, 128] # Fixed
     gating_hidden_dims: list[int] = [32] #[64, 32] # gating network
     weight_hidden_dims: list[int] = [32] # wieght network
     weight_router_hidden_dims: list[int] = [128] # weight router network

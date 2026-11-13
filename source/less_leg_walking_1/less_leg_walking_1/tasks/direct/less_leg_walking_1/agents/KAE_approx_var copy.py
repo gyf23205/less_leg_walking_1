@@ -15,8 +15,8 @@ from torch.utils.data import DataLoader
 
 # ---- KAE-side sizes and constants (the only place they are set) ----------------------------
 BLOCK_SIZE = 2                   # real block size of K; must divide observable_dim
-OBSERVER_HIDDEN_DIMS = [64, 64]  # ModeObserver MLP hidden widths (ELU)
-OBSERVER_LOSS_WEIGHT = 1.0       # weight of the observer error in the KAE loss
+OBSERVER_HIDDEN_DIMS = [64, 32, 16]  # ModeObserver MLP hidden widths (ELU)
+OBSERVER_LOSS_WEIGHT = 0.1       # weight of the observer error in the KAE loss
 # -------------------------------------------------------------------------------------------
 
 
