@@ -192,7 +192,13 @@ class LessLegWalkingEnv(DirectRLEnv):
         # Currently, both MoE_magnitude_penality and weight_stability are disabled via setting scale = 0
         ##########################################################
 
-        if self._policy_ref.last_expert_weights is not None:
+        # _policy_ref is only set by train_moe.py; every other method (componet, residual,
+        # scratch) leaves it unset, so guard it the same way the blocks below do.
+        if (
+            hasattr(self, "_policy_ref")
+            and self._policy_ref is not None
+            and self._policy_ref.last_expert_weights is not None
+        ):
             current_weights = self._policy_ref.last_expert_weights # [16 experts]
             weight_stability = torch.sum(torch.square(current_weights), dim=1)
         else:

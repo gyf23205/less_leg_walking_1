@@ -39,7 +39,10 @@ from pathlib import Path
 # its ORIGINAL_TASK first, then TRAIN_TASKS). Keep in sync with the active
 # entries in train_FAME.py's DEFAULT_TASKS.
 TASKS = [
-    "Less-AnymalC-Flat-Walking-Direct-v1",
+    # Less-AnymalC-Flat-Walking is commented out to match train_componet_CRL.py and
+    # train_res_CRL.py: all three methods now start from the shared base model
+    # (base_models/rough_walking.pth) rather than training flat-walking as task 1.
+    # "Less-AnymalC-Flat-Walking-Direct-v1",
     "Less-AnymalC-Jump-Direct-v1",
     "Less-Leg-Flat-Walking-Direct-v1",
     "Less-AnymalC-Rough-Walking-Direct-v1",

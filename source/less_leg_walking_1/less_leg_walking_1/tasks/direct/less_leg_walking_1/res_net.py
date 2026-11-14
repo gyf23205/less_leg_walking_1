@@ -6,7 +6,10 @@ class ResCfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom ResNet policy."""
     # raw_obs_dim: int = 226
     # hidden_dim_moe: list[int] = [512, 256, 128]
-    original_policy_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/walking_policy_new.pth"
+    # Shared base model, same one train_res_CRL.py / train_componet_CRL.py seed from.
+    # (The old default pointed one directory up at walking_policy_new.pth, which now
+    # lives in base_models/ -- a bare train_res.py run failed on a missing file.)
+    original_policy_path: str = "/home/yifan/git/less_leg_walking_1/source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/base_models/rough_walking.pth"
     # original_policy_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/results/walking_policy_new.pth"
     obs_dim: int = 235
     device: str = "cuda"

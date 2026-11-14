@@ -392,6 +392,26 @@ class FAMEAgent(Agent):
         self._task_step = 0
 
         if is_first_switch:
+            # With a base policy supplied (--init_policy), the first task still gets a
+            # choice: fresh random learner vs the pretrained base. The meta learner is
+            # untrained at this point, so it is not a candidate yet.
+            base_actor = getattr(self, "base_actor", None)
+            if base_actor is not None and eval_fn is not None:
+                det_steps = self.cfg["detection_step"]
+                avg_fresh = eval_fn(self.fast_actor, det_steps)
+                avg_base = eval_fn(base_actor, det_steps)
+                print(f"[FAME]   Fresh (random) avg return: {avg_fresh:.3f}")
+                print(f"[FAME]   Base policy    avg return: {avg_base:.3f}")
+                if avg_base > avg_fresh:
+                    print("[FAME] First environment: Base init -> warm-starting Fast-Learner.")
+                    self._copy_base_to_fast()
+                    choice = "Base"
+                else:
+                    print("[FAME] First environment: Random init (fresh >= base).")
+                    choice = "Random"
+                self._log_detection(new_env_name, avg_fresh, float("nan"), choice, avg_base)
+                self.flag_reg.append(choice)
+                return choice
             print(f"[FAME] First environment: {new_env_name} – no detection needed.")
             self.flag_reg.append("Initial")
             return "Initial"
@@ -408,19 +428,44 @@ class FAMEAgent(Agent):
         print(f"[FAME]   Fresh (random) avg return: {avg_fresh:.3f}")
         print(f"[FAME]   Meta-Learner   avg return: {avg_meta:.3f}")
 
-        if avg_meta > avg_fresh:
+        # Optional third candidate: the pretrained base policy (--init_policy).
+        base_actor = getattr(self, "base_actor", None)
+        avg_base = None
+        if base_actor is not None:
+            avg_base = eval_fn(base_actor, det_steps)
+            print(f"[FAME]   Base policy    avg return: {avg_base:.3f}")
+
+        best = max(
+            [("Random", avg_fresh), ("Meta", avg_meta)]
+            + ([("Base", avg_base)] if avg_base is not None else []),
+            key=lambda kv: kv[1],
+        )
+        choice = best[0]
+        if choice == "Meta":
             print("[FAME] Step 3: Meta init → warm-starting Fast-Learner actor.")
             self._copy_meta_to_fast()   # copy meta *actor* only; critic stays fresh
-            choice = "Meta"
+        elif choice == "Base":
+            print("[FAME] Step 3: Base init → warm-starting Fast-Learner actor.")
+            self._copy_base_to_fast()   # copy base *actor* only; critic stays fresh
         else:
-            print("[FAME] Step 3: Random init (fresh learner ≥ meta).")
-            choice = "Random"
+            print("[FAME] Step 3: Random init (fresh learner won).")
 
-        self._log_detection(new_env_name, avg_fresh, avg_meta, choice)
+        self._log_detection(new_env_name, avg_fresh, avg_meta, choice, avg_base)
         self.flag_reg.append(choice)
         return choice
 
-    def _log_detection(self, env_name: str, avg_fresh: float, avg_meta: float, choice: str) -> None:
+    def _copy_base_to_fast(self) -> None:
+        """Warm-start the fast actor from the pretrained base policy (actor only)."""
+        self.fast_actor.load_state_dict(self.base_actor.state_dict())
+
+    def _log_detection(
+        self,
+        env_name: str,
+        avg_fresh: float,
+        avg_meta: float,
+        choice: str,
+        avg_base: float | None = None,
+    ) -> None:
         """Log the detection returns and chosen init to TensorBoard/console."""
         task_idx = len(self.games) - 1
         writer = getattr(self, "writer", None)
@@ -430,10 +475,14 @@ class FAMEAgent(Agent):
                 writer.add_scalar("Detection/avg_meta",  float(avg_meta),  task_idx)
                 # 1 = Meta warm-start, 0 = fresh/random
                 writer.add_scalar("Detection/from_meta", 1.0 if choice == "Meta" else 0.0, task_idx)
+                if avg_base is not None:
+                    writer.add_scalar("Detection/avg_base", float(avg_base), task_idx)
+                    writer.add_scalar("Detection/from_base", 1.0 if choice == "Base" else 0.0, task_idx)
             except Exception:
                 pass
+        base_str = f" base={avg_base:.3f}" if avg_base is not None else ""
         print(f"[FAME] Detection[{task_idx}] {env_name}: "
-              f"fresh={avg_fresh:.3f} meta={avg_meta:.3f} -> {choice}", flush=True)
+              f"fresh={avg_fresh:.3f} meta={avg_meta:.3f}{base_str} -> {choice}", flush=True)
 
     def end_of_env_segment(self) -> None:
         """Distil Fast→Meta, append this task's data to the meta buffer, reset.

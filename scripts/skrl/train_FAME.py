@@ -82,6 +82,14 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Override number of parallel envs.")
 parser.add_argument("--seed", type=int, default=None, help="Global random seed.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to FAME checkpoint to resume from.")
+parser.add_argument(
+    "--init_policy",
+    type=str,
+    default=None,
+    help="Optional rsl_rl checkpoint (e.g. base_models/rough_walking.pth) offered as an "
+         "extra initialisation candidate at every task switch, alongside the fresh and "
+         "meta learners. Selected only if it evaluates best on the new task.",
+)
 parser.add_argument("--video", action="store_true", default=False)
 parser.add_argument("--video_length", type=int, default=200)
 parser.add_argument("--video_interval", type=int, default=2000)
@@ -102,7 +110,7 @@ parser.add_argument(
     type=str,
     default=None,
     help="Explicit log directory override. If set, ALL tasks log here; otherwise each task gets "
-         "its own logs/task1/<experiment_name>/<method> directory.",
+         "its own logs/task2/<experiment_name>/<method>/<seed> directory.",
 )
 parser.add_argument(
     "--global_step",
@@ -211,7 +219,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
 
     # ------------------------------------------------------------------
     # Per-task log directory: mirror the other methods by keying on each task's
-    # rsl_rl experiment_name -> logs/task1/<experiment_name>/<method>.
+    # rsl_rl experiment_name -> logs/task2/<experiment_name>/<method>/<seed>.
     # ------------------------------------------------------------------
     from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
 
@@ -225,7 +233,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             task_folder = getattr(_rsl_cfg, "experiment_name", None) or task_id
         except Exception:
             task_folder = task_id
-        return os.path.abspath(os.path.join("logs", "task1", task_folder, _method_name))
+        return os.path.abspath(
+            os.path.join("logs", "task2", task_folder, _method_name, str(seed))
+        )
 
     # ------------------------------------------------------------------
     # FAME agent cfg (shared across all task segments)
@@ -491,6 +501,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             )
             agent.init()
 
+            # Offer the pretrained base policy as an initialisation candidate.
+            if args_cli.init_policy:
+                from less_leg_walking_1.tasks.direct.less_leg_walking_1.baselines.FAME.model import (
+                    ppo_actor_from_rsl_rl,
+                )
+
+                agent.base_actor = ppo_actor_from_rsl_rl(
+                    args_cli.init_policy,
+                    obs_dim=agent.obs_dim,
+                    action_dim=agent.action_dim,
+                    hidden_dims=fame_cfg.get("hidden_dims", [512, 256, 128]),
+                    activation=fame_cfg.get("activation", "elu"),
+                    device=str(agent.device),
+                ).eval()
+                for _p in agent.base_actor.parameters():
+                    _p.requires_grad_(False)
+                print(f"[FAME] Base-policy init candidate loaded: {args_cli.init_policy}")
+
             if args_cli.checkpoint:
                 resume_path = retrieve_file_path(args_cli.checkpoint)
                 print(f"[INFO] Loading checkpoint: {resume_path}")
@@ -507,7 +535,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         # -- Notify agent about the current task --
         # Global first task ever: no detection. Otherwise run detection to pick
         # Fast / Meta / Random initialisation for the fast policy on the new task.
-        eval_fn = None if is_global_first else _make_eval_fn(env)
+        # The very first task normally skips detection entirely. When a base policy is
+        # offered (--init_policy) it still needs an eval_fn, so the fresh learner and the
+        # base can be scored against each other on task 1.
+        eval_fn = (
+            _make_eval_fn(env)
+            if (not is_global_first or args_cli.init_policy)
+            else None
+        )
         agent.on_env_switch(current_task, eval_fn=eval_fn, is_first_switch=is_global_first)
 
         obs, infos = env.reset()

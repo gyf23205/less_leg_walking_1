@@ -18,17 +18,18 @@ from pathlib import Path
 
 import torch
 
-ORIGINAL_TASK = "Less-AnymalC-Rough-Walking-Direct-v1" # Assume the original task's 'KAE' is given
+# Key of the starting KAE: KAEs/<ORIGINAL_TASK>_KAE.pth. It is fitted to the shared base
+# policy base_models/rough_walking.pth (the same base componet and residual start from) by
+# scripts/rsl_rl/fit_base_kae.py. It is deliberately NOT a task id: Rough-Walking is also
+# trained as task 3 below, and a shared name would make that task's KAE overwrite this one.
+ORIGINAL_TASK = "Base-Rough-Walking"
 
-# TRAIN_TASKS = [ # train in this order
-#     "Less-AnymalC-Jump-Rough-Direct-v1",
-# ]
-
+# Task sequence, matching scripts/rsl_rl/train_componet_CRL.py, train_res_CRL.py and
+# scripts/skrl/train_FAME_CRL.py (TASKS), so all methods under logs/task2 are comparable.
 TRAIN_TASKS = [ # train in this order
     "Less-AnymalC-Jump-Direct-v1",
-    # "Less-AnymalC-Rough-Walking-Direct-v1",
-    "Less-AnymalC-Flat-Walking-Direct-v1",
     "Less-Leg-Flat-Walking-Direct-v1",
+    "Less-AnymalC-Rough-Walking-Direct-v1",
     "Less-AnymalC-Jump-Rough-Direct-v1",
     "Less-Leg-Rough-Walking-Direct-v1",
 ]
@@ -42,9 +43,11 @@ KAE_APPROX_FILE = TASK_DIRECTORY / "agents" / "KAE_approx.py"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 USAGE = """\
-train_moe_CRL.py [--session ID] [--resume | --start-from N|TASK] [--list-sessions] [--crl-help]
-           [... every other argument is forwarded to train_moe.py ...]
+train_moe_CRL.py [--seed N] [--session ID] [--resume | --start-from N|TASK] [--list-sessions]
+           [--crl-help] [... every other argument is forwarded to train_moe.py ...]
 
+  --seed N           Seed used for every task in the chain (default 42). It is also the
+                     leaf of the log path: logs/task2/<experiment name>/moe/<seed>.
   --session ID       Session name. Defaults to sYYYYmmdd_HHMMSS.
                      KAEs, policies, observations and logs are kept per session,
                      so several trials can run concurrently.
@@ -258,6 +261,7 @@ def verify_previous_artifacts(kae_directory, completed_tasks):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--session", default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--start-from", default=None)
@@ -269,8 +273,9 @@ def parse_arguments():
 # Run directory resolution
 # --------------------------------------------------------------------------------------
 def get_run_directories():
+    """Run directories under logs/task2/<experiment name>/moe/<seed>[_<run_name>]/."""
     run_directories = set()
-    for model_file in Path("logs/task1").rglob(
+    for model_file in Path("logs/task2").rglob(
         "complete_model_with_metadata.pth"
     ):
         run_directories.add(model_file.parent)
@@ -354,6 +359,7 @@ def main():
             "session_id": session_id,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "original_task": ORIGINAL_TASK,
+            "seed": arguments.seed,
             "train_tasks": list(TRAIN_TASKS),
             "completed_tasks": [ORIGINAL_TASK],
             "runs": {},
@@ -367,6 +373,7 @@ def main():
 
     next_task = TRAIN_TASKS[start_index] if start_index < len(TRAIN_TASKS) else "(none)"
     print(f"[CRL] session     : {session_id}")
+    print(f"[CRL] seed        : {arguments.seed}")
     print(f"[CRL] session dir : {kae_directory}")
     print(f"[CRL] start from  : #{start_index + 1} {next_task}")
     print(f"[CRL] completed   : {state['completed_tasks']}")
@@ -381,10 +388,13 @@ def main():
             str(train_script),
             "--task",
             task_name,
+            "--seed",
+            str(arguments.seed),
         ]
         command.extend(train_arguments)
 
         environment = os.environ.copy()
+        environment["ALGO_METHOD"] = "moe"  # selects MoECfg + algo_cfg/moe.yaml in rsl_rl_ppo_cfg.py
         environment["CRL_MODE"] = "1"
         environment["CRL_OBSERVATION_LOG"] = "1"
         environment["CRL_TRAIN_KAE"] = "1"

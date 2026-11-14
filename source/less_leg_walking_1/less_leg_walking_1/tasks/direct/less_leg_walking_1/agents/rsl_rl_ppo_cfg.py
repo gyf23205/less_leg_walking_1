@@ -11,8 +11,10 @@ from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
 
-# mode = "scratch"  # Choose from "scratch", "residual", "MoE", or "component"
-mode = "MoE"  # Choose from "scratch", "residual", "MoE", or "component"
+# NOTE: experiment_name is a plain task name for every config below. Under the
+# logs/task2/<task name>/<method name>/<seed> layout the method already has its own
+# path level, so baking a method prefix into the task folder is redundant (and was
+# actively wrong whenever this switch drifted out of sync with ALGO_METHOD).
 
 # ############################################
 # ALGO_METHOD is the single switch that selects the method for every runner config
@@ -25,7 +27,10 @@ mode = "MoE"  # Choose from "scratch", "residual", "MoE", or "component"
 #   "nominal" -> from-scratch AC + algo_cfg/nominal.yaml  (train from scratch)
 #   "moe"     -> MoECfg          + algo_cfg/moe.yaml
 #   "compo"   -> CompoCfg        + algo_cfg/compo.yaml
-ALGO_METHOD = "compo"
+# The ALGO_METHOD environment variable overrides the default below. Drivers set it per
+# process (train_moe_CRL.py -> "moe", run_task2_seeds.sh scratch -> "nominal"), so runs of
+# different methods can be launched without editing this file.
+ALGO_METHOD = os.environ.get("ALGO_METHOD", "res")
 
 _ALGO_CFG_DIR = os.path.join(os.path.dirname(__file__), "algo_cfg")
 
@@ -72,7 +77,7 @@ def load_algorithm_cfg(terrain: str, method: str = ALGO_METHOD) -> RslRlPpoAlgor
 class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 2500  # Increased for more training
-    save_interval = 200
+    save_interval = 500  # checkpoint every 500 iterations; the final model is always saved too
     experiment_name = "less_leg_walking_flat"
     empirical_normalization = False
     # resume = True
@@ -85,13 +90,7 @@ class LessLegWalkingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
-    # experiment_name = "less_leg_walking_rough"
-    experiment_name = {
-            "scratch": "less_leg_walking_rough",
-            "MoE": "MoE16_less_leg_walking_rough",
-            "residual": "Residual_less_leg_walking_rough",
-            "component": "Component_less_leg_walking_rough"
-        }[mode]
+    experiment_name = "less_leg_walking_rough"
     max_iterations = 2500
 
     algorithm = load_algorithm_cfg("rough")
@@ -100,7 +99,7 @@ class LessLegWalkingRoughPPORunnerCfg(LessLegWalkingFlatPPORunnerCfg):
 class AnymalCFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 4000 #2500  # Increased for more training
-    save_interval = 200
+    save_interval = 500  # checkpoint every 500 iterations; the final model is always saved too
     experiment_name = "anymal_c_flat_leg_walking"
     empirical_normalization = False
     # resume = True
@@ -119,16 +118,10 @@ class AnymalCRoughPPORunnerCfg(AnymalCFlatPPORunnerCfg):
 
 @configclass
 class AnymalJumpFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    # experiment_name = "anymal_c_jump_flat"
-    experiment_name = {
-            "scratch": "anymal_c_jump_flat",
-            "MoE": "MoE16_anymal_c_jump_flat",
-            "residual": "Residual_anymal_c_jump_flat",
-            "component": "Component_anymal_c_jump_flat"
-        }[mode]
+    experiment_name = "anymal_c_jump_flat"
     num_steps_per_env = 24
     max_iterations = 2500 # 4000  # Increased for more training
-    save_interval = 200
+    save_interval = 500  # checkpoint every 500 iterations; the final model is always saved too
     empirical_normalization = False
 
     # Policy is selected by ALGO_METHOD (see top of file): res / nominal / moe / compo

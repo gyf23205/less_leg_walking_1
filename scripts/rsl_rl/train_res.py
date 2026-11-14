@@ -146,12 +146,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.seed = seed
         agent_cfg.seed = seed
 
-    # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "task1", agent_cfg.experiment_name)
+    # specify directory for logging experiments:
+    #   logs/task2/<task name>/<method name>/<seed>
+    # <task name> is agent_cfg.experiment_name, the same short name used under logs/task1,
+    # so every method/seed of the same task sits side by side under one task folder.
+    log_root_path = os.path.join("logs", "task2", agent_cfg.experiment_name, "residual")
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {method}_{run_name}
-    log_dir = "residual"
+    # specify directory for logging runs: the seed, chosen with --seed on the command line
+    log_dir = str(agent_cfg.seed)
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:

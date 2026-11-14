@@ -58,4 +58,15 @@ agent:
     directory: "FAME"
     experiment_name: ""
     write_interval: 1000
+    # 50000 rows = ~2083 iterations (rollout_steps=24), i.e. 2 periodic saves per
+    # 100k-row task segment.
+    #
+    # NOTE: deliberately NOT the rsl_rl methods' 500-iteration cadence. Every FAME
+    # checkpoint embeds the meta replay buffer, which accumulates across the chain, so
+    # checkpoint size grows with task position (7.7 MB on task 1 -> 385 MB on task 5).
+    # At a 12000-row interval (8 saves/task) that produced 23 GB of periodic
+    # checkpoints for 3 seeds and filled the disk. The end-of-segment checkpoint
+    # (checkpoint_task<NN>_end / checkpoint_final) is still written unconditionally,
+    # so the final model of every task is always kept, and the TensorBoard curves
+    # record training progress at full resolution regardless of this interval.
     checkpoint_interval: 50000

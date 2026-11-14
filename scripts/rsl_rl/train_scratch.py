@@ -149,12 +149,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.seed = seed
         agent_cfg.seed = seed
 
-    # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "task1", agent_cfg.experiment_name)
+    # Scratch must train the plain actor-critic; any other ALGO_METHOD would silently train another method.
+    if agent_cfg.policy.class_name != "ActorCritic":
+        raise RuntimeError(
+            f"train_scratch.py needs ALGO_METHOD=nominal (policy class ActorCritic), got "
+            f"{agent_cfg.policy.class_name!r}. Run with: ALGO_METHOD=nominal python {sys.argv[0]} ..."
+        )
+
+    # specify directory for logging experiments:
+    #   logs/task2/<task name>/<method name>/<seed>
+    # matching train_componet.py / train_res.py / train_moe.py.
+    log_root_path = os.path.join("logs", "task2", agent_cfg.experiment_name, "scratch")
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: fixed name per training method for cross-method comparison
-    log_dir = "scratch"
+    # specify directory for logging runs: the seed, chosen with --seed on the command line
+    log_dir = str(agent_cfg.seed)
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:

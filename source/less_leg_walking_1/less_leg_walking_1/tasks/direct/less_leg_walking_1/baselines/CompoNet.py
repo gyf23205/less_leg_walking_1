@@ -87,6 +87,12 @@ class CompoActorCritic(ActorCritic):
                 print("Loading prevs..............")
                 complete_model = torch.load(pre_dir, map_location=self.device, weights_only=False)
                 unit = complete_model["actor"]
+                # CompoNet chains its prevs through nn.Sequential and unpacks `phi, x` from
+                # each one, so a prev has to be a CompoNet stage. A checkpoint saved by another
+                # method (e.g. the shared base_models/rough_walking.pth actor, a plain MLP) is
+                # a bare state->action module; wrap it so it can seed the chain.
+                if not isinstance(unit, (CompoNet, FirstModuleWrapper)):
+                    unit = FirstModuleWrapper(unit, ret_probs=False)
                 print(type(unit))
                 prevs.append(unit)
 
