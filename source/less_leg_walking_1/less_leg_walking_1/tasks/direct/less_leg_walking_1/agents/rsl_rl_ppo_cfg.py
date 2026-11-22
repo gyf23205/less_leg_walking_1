@@ -46,11 +46,12 @@ def make_policy_cfg(method: str = ALGO_METHOD):
         from ..res_net import ResCfg  # noqa: F401  (ResActorCritic is injected by the train script)
         return ResCfg()
     if method == "nominal":
+        from .shared_net_cfg import ACTIVATION, ACTOR_HIDDEN_DIMS, CRITIC_HIDDEN_DIMS, INIT_NOISE_STD
         return RslRlPpoActorCriticCfg(
-            init_noise_std=1.0,
-            actor_hidden_dims=[512, 256, 128],
-            critic_hidden_dims=[512, 256, 128],
-            activation="elu",
+            init_noise_std=INIT_NOISE_STD,
+            actor_hidden_dims=list(ACTOR_HIDDEN_DIMS),
+            critic_hidden_dims=list(CRITIC_HIDDEN_DIMS),
+            activation=ACTIVATION,
         )
     if method == "moe":
         from ..MoE import MoECfg

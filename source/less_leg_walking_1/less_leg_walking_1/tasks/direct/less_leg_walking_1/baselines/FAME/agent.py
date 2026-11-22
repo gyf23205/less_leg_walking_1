@@ -583,8 +583,17 @@ class FAMEAgent(Agent):
             # collected samples (T*N). We follow the rsl_rl convention of
             # splitting into `num_mini_batches` if needed.
             num_mini_batches_cfg = int(self.cfg.get("num_mini_batches", 4))
-            effective_mb = min(self._mini_batch, max(1, total_samples // num_mini_batches_cfg))
-            for start in range(0, total_samples, effective_mb):
+            ppo_num_mini_batches = self.cfg.get("ppo_num_mini_batches")
+            if ppo_num_mini_batches:
+                # Exactly this many equal mini-batches per epoch, remainder dropped, as in
+                # rsl_rl's PPO (set by train_FAME.py to match the rsl_rl methods' budget).
+                # mini_batch_size is left alone: it also sets the meta-distillation batch.
+                effective_mb = total_samples // int(ppo_num_mini_batches)
+                starts = range(0, effective_mb * int(ppo_num_mini_batches), effective_mb)
+            else:
+                effective_mb = min(self._mini_batch, max(1, total_samples // num_mini_batches_cfg))
+                starts = range(0, total_samples, effective_mb)
+            for start in starts:
                 idx = perm[start: start + effective_mb]
                 if len(idx) < 2:
                     continue
@@ -770,6 +779,11 @@ class FAMEAgent(Agent):
         (all_states, all_actions) = self.memory_fast2meta.sample_all(
             names=self._meta_names
         )[0]
+        # sample_all returns the whole storage, written or not. Before the buffer has wrapped,
+        # only the first len() rows hold data; the rest is uninitialised memory that turned the
+        # meta actor into NaN when a task was shorter than size_fast2meta / num_envs steps.
+        n_valid = len(self.memory_fast2meta)
+        all_states, all_actions = all_states[:n_valid], all_actions[:n_valid]
         n_envs = self.memory_meta.num_envs
         n      = all_states.shape[0]
         for start in range(0, n, n_envs):

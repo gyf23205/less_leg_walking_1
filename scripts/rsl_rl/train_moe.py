@@ -81,6 +81,8 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 
 import gymnasium as gym
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/, for common.*
+from common.log_root import crl_log_root  # noqa: E402
 import time
 import torch
 from datetime import datetime, timezone
@@ -146,10 +148,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg.seed = seed
 
     # specify directory for logging experiments:
-    #   logs/task2/<task name>/<method name>/<seed>
+    #   <log root>/<task name>/<method name>/<seed>
     # <task name> is agent_cfg.experiment_name, the same short name used under logs/task1,
     # so every method/seed of the same task sits side by side under one task folder.
-    log_root_path = os.path.join("logs", "task2", agent_cfg.experiment_name, "moe")
+    log_root_path = os.path.join(crl_log_root(), agent_cfg.experiment_name, "moe")
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs: the seed, chosen with --seed on the command line
@@ -308,7 +310,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         model = runner.alg.policy
         print("[INFO]: Found model under 'policy' attribute.")
         print(f"[INFO]: Policy details: {model}")
-        print(f"[INFO]: model.actor: {model.actor}")
     elif hasattr(runner.alg, 'actor'):
         model = runner.alg.actor
         print("[INFO]: Found model under 'actor' attribute.")
@@ -317,8 +318,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         model = None
 
 
+    # MoEActorCritic has no usable `actor` submodule (its policy is forward(): KAE experts +
+    # mlp_network), so the whole policy state dict is saved instead. Rebuild an
+    # MoEActorCritic with the same KAE session and load it to use the policy.
     complete_model_data = {
-        'actor': model.actor,
+        'policy_state_dict': model.state_dict(),
         'critic': model.critic,
         'obs_range': getattr(model, 'obs_range', None),
         # 'optimizer_state': runner.alg.optimizer.state_dict() if hasattr(runner.alg, 'optimizer') else None,

@@ -17,17 +17,17 @@ Each task's TensorBoard logs still land under ``logs/task1/<experiment_name>/FAM
 Examples
 --------
 # Run the whole default sequence (args after are passed through to train_FAME.py)
-python scripts/skrl/train_FAME_CRL.py --switch_steps 100000 --headless
+python scripts/skrl/train_FAME_CRL.py --headless
 
 # Override the task sequence
 python scripts/skrl/train_FAME_CRL.py \\
     --tasks Less-AnymalC-Flat-Walking-Direct-v1,Less-Leg-Flat-Walking-Direct-v1 \\
-    --switch_steps 100000 --headless
+    --headless
 
 # Resume the sequence from task index 2, seeding it with a checkpoint
 python scripts/skrl/train_FAME_CRL.py \\
     --start_idx 2 --checkpoint logs/skrl/FAME_CRL/checkpoints/task01_end \\
-    --switch_steps 100000 --headless
+    --headless
 """
 
 import argparse

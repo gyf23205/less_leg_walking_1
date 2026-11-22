@@ -74,6 +74,7 @@ tests/
 **/*.pth
 **/*.pt
 **/*.csv
+**/*.json
 
 # Log
 source/less_leg_walking_1/less_leg_walking_1/tasks/direct/less_leg_walking_1/KAEs/sessions/**/crl_state.json

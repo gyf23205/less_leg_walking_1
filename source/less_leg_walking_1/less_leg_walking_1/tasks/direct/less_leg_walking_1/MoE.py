@@ -4,6 +4,8 @@ from pytest import param
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 
+from .agents.shared_net_cfg import ACTIVATION, ACTOR_HIDDEN_DIMS, CRITIC_HIDDEN_DIMS, INIT_NOISE_STD
+
 import importlib.util
 import os
 from pathlib import Path
@@ -13,9 +15,10 @@ class MoECfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom MoE policy."""
     padded_dim: int = 256
     observable_dim: int = 16
-    actor_hidden_dims: list[int] = [256, 128, 64] # Residual net
+    # Residual MLP; shared with every method (agents/shared_net_cfg.py), was [256, 128, 64].
+    actor_hidden_dims: list[int] = list(ACTOR_HIDDEN_DIMS)
     # actor_hidden_dims: list[int] = [128, 64, 32]
-    critic_hidden_dims: list[int] = [512, 256, 128]
+    critic_hidden_dims: list[int] = list(CRITIC_HIDDEN_DIMS)
     gating_hidden_dims: list[int] = [32] #[64, 32] # gating network
     weight_hidden_dims: list[int] = [32] # wieght network
     weight_router_hidden_dims: list[int] = [128] # weight router network
@@ -41,8 +44,8 @@ class MoECfg(RslRlPpoActorCriticCfg):
     class_name: str = "MoEActorCritic"
     actor_obs_normalization: bool = False
     critic_obs_normalization: bool = False
-    activation: str = "elu"
-    init_noise_std: float = 1.0  # ADD THIS - match train_scratch
+    activation: str = ACTIVATION
+    init_noise_std: float = INIT_NOISE_STD
 
     # Set explicitly (don't reference other fields)
     # num_actor_obs: int = 256  # Match padded_dim or your obs space
@@ -179,9 +182,13 @@ class MoEActorCritic(ActorCritic):
             **kwargs,
         )
 
-        # Ensure gradients are enabled for actor and critic
-        for param in self.actor.parameters():
-            param.requires_grad = True
+        # ActorCritic.__init__ always builds self.actor, but this class never uses it: actions come
+        # from forward() (KAE experts + self.mlp_network), and act/act_inference are overridden.
+        # Left in place it was dead trainable weights, and anything reading policy.actor (Isaac
+        # Lab's JIT/ONNX exporter, the saved 'actor' entry) silently got an untrained network.
+        del self.actor
+
+        # Ensure gradients are enabled for the critic
         for param in self.critic.parameters():
             param.requires_grad = True
 

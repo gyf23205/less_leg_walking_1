@@ -16,6 +16,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/, for common.*
+from common.log_root import crl_log_root  # noqa: E402
+
 import torch
 
 # Key of the starting KAE: KAEs/<ORIGINAL_TASK>_KAE.pth. It is fitted to the shared base
@@ -25,7 +28,7 @@ import torch
 ORIGINAL_TASK = "Base-Rough-Walking"
 
 # Task sequence, matching scripts/rsl_rl/train_componet_CRL.py, train_res_CRL.py and
-# scripts/skrl/train_FAME_CRL.py (TASKS), so all methods under logs/task2 are comparable.
+# scripts/skrl/train_FAME_CRL.py (TASKS), so all methods under the log root are comparable.
 TRAIN_TASKS = [ # train in this order
     "Less-AnymalC-Jump-Direct-v1",
     "Less-Leg-Flat-Walking-Direct-v1",
@@ -47,7 +50,7 @@ train_moe_CRL.py [--seed N] [--session ID] [--resume | --start-from N|TASK] [--l
            [--crl-help] [... every other argument is forwarded to train_moe.py ...]
 
   --seed N           Seed used for every task in the chain (default 42). It is also the
-                     leaf of the log path: logs/task2/<experiment name>/moe/<seed>.
+                     leaf of the log path: <log root>/<experiment name>/moe/<seed>.
   --session ID       Session name. Defaults to sYYYYmmdd_HHMMSS.
                      KAEs, policies, observations and logs are kept per session,
                      so several trials can run concurrently.
@@ -273,9 +276,9 @@ def parse_arguments():
 # Run directory resolution
 # --------------------------------------------------------------------------------------
 def get_run_directories():
-    """Run directories under logs/task2/<experiment name>/moe/<seed>[_<run_name>]/."""
+    """Run directories under <log root>/<experiment name>/moe/<seed>[_<run_name>]/."""
     run_directories = set()
-    for model_file in Path("logs/task2").rglob(
+    for model_file in Path(crl_log_root()).rglob(
         "complete_model_with_metadata.pth"
     ):
         run_directories.add(model_file.parent)

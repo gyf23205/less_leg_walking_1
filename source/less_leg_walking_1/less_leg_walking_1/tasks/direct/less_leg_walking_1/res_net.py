@@ -1,6 +1,8 @@
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlPpoActorCriticCfg
 
+from .agents.shared_net_cfg import ACTIVATION, ACTOR_HIDDEN_DIMS, CRITIC_HIDDEN_DIMS, INIT_NOISE_STD
+
 @configclass
 class ResCfg(RslRlPpoActorCriticCfg):
     """Configuration for the custom ResNet policy."""
@@ -13,10 +15,12 @@ class ResCfg(RslRlPpoActorCriticCfg):
     # original_policy_path: str = "/home/joonwon/github/Koopman_decompose_ext/KAE/results/walking_policy_new.pth"
     obs_dim: int = 235
     device: str = "cuda"
-    activation: str = "elu"
+    activation: str = ACTIVATION
     class_name: str = "ResActorCritic"
-    actor_hidden_dims: list[int] = [1024, 512, 256]
-    critic_hidden_dims: list[int] = [512, 256, 128]
+    # Shared with every method (agents/shared_net_cfg.py); was [1024, 512, 256] from a per-method sweep.
+    actor_hidden_dims: list[int] = list(ACTOR_HIDDEN_DIMS)
+    critic_hidden_dims: list[int] = list(CRITIC_HIDDEN_DIMS)
+    init_noise_std: float = INIT_NOISE_STD  # was unset -> ResActorCritic fell back to 0.8
     actor_obs_normalization: bool = False
     critic_obs_normalization: bool = False
 

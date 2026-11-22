@@ -87,6 +87,8 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 
 import gymnasium as gym
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/, for common.*
+from common.log_root import crl_log_root  # noqa: E402
 import time
 import torch
 from datetime import datetime, timezone
@@ -147,10 +149,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg.seed = seed
 
     # specify directory for logging experiments:
-    #   logs/task2/<task name>/<method name>/<seed>
+    #   <log root>/<task name>/<method name>/<seed>
     # <task name> is agent_cfg.experiment_name, the same short name used under logs/task1,
     # so every method/seed of the same task sits side by side under one task folder.
-    log_root_path = os.path.join("logs", "task2", agent_cfg.experiment_name, "residual")
+    log_root_path = os.path.join(crl_log_root(), agent_cfg.experiment_name, "residual")
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs: the seed, chosen with --seed on the command line

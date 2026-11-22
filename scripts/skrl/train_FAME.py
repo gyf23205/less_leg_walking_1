@@ -24,17 +24,16 @@ single process.
 Command-line examples
 ---------------------
 # Train just the first task of the default sequence
-python scripts/skrl/train_FAME.py --task_idx 0 --switch_steps 100000 --headless
+python scripts/skrl/train_FAME.py --task_idx 0 --headless
 
 # Train the third task, resuming FAME state from the previous task's checkpoint
 python scripts/skrl/train_FAME.py \\
     --task_idx 2 \\
     --checkpoint logs/skrl/FAME_CRL/checkpoints/task01_end \\
-    --switch_steps 100000 \\
     --headless
 
 # Usually you just run the whole sequence via the driver:
-python scripts/skrl/train_FAME_CRL.py --switch_steps 100000 --headless
+python scripts/skrl/train_FAME_CRL.py --headless
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -72,11 +71,11 @@ parser.add_argument(
 parser.add_argument(
     "--switch_steps",
     type=int,
-    default=100_000,
+    default=None,
     help=(
-        "Number of environment timesteps (rows) to run per task segment. Default 100000 = "
-        "2500 rollouts x 40 rollout_steps, matching the rsl_rl methods' 2500 iterations so both "
-        "reach the same unified x-axis budget of 2500 x (8 epochs x 8 minibatches) = 160k updates."
+        "Environment timesteps (rows) per task segment. Default: the task's rsl_rl budget, "
+        "max_iterations x num_steps_per_env (2500 x 24 = 60000), so FAME gets exactly the samples "
+        "and PPO updates of the rsl_rl methods. Override only for debugging."
     ),
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Override number of parallel envs.")
@@ -110,7 +109,7 @@ parser.add_argument(
     type=str,
     default=None,
     help="Explicit log directory override. If set, ALL tasks log here; otherwise each task gets "
-         "its own logs/task2/<experiment_name>/<method>/<seed> directory.",
+         "its own <log root>/<experiment_name>/<method>/<seed> directory.",
 )
 parser.add_argument(
     "--global_step",
@@ -139,6 +138,8 @@ simulation_app = app_launcher.app
 """Rest of imports (after Isaac Sim is up)."""
 
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/, for common.*
+from common.log_root import crl_log_root  # noqa: E402
 import signal
 import threading
 import random
@@ -214,12 +215,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     start_idx = args_cli.task_idx
 
     print(f"[INFO] Task sequence ({len(task_list)} tasks): {task_list}")
-    print(f"[INFO] Steps per task: {switch_steps}")
+    print(f"[INFO] Steps per task: {switch_steps or 'rsl_rl budget'}")
     print(f"[INFO] Starting from task index {start_idx}: {task_list[start_idx]}")
 
     # ------------------------------------------------------------------
     # Per-task log directory: mirror the other methods by keying on each task's
-    # rsl_rl experiment_name -> logs/task2/<experiment_name>/<method>/<seed>.
+    # rsl_rl experiment_name -> <log root>/<experiment_name>/<method>/<seed>.
     # ------------------------------------------------------------------
     from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
 
@@ -234,7 +235,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         except Exception:
             task_folder = task_id
         return os.path.abspath(
-            os.path.join("logs", "task2", task_folder, _method_name, str(seed))
+            os.path.join(crl_log_root(), task_folder, _method_name, str(seed))
         )
 
     # ------------------------------------------------------------------
@@ -247,6 +248,38 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         fame_cfg["experiment"].update(agent_cfg["agent"]["experiment"])
 
     # ------------------------------------------------------------------
+    # Same network and training budget as the rsl_rl methods.
+    # ------------------------------------------------------------------
+    from less_leg_walking_1.tasks.direct.less_leg_walking_1.agents.shared_net_cfg import (
+        ACTIVATION,
+        ACTOR_HIDDEN_DIMS,
+    )
+
+    if list(fame_cfg.get("hidden_dims", [])) != ACTOR_HIDDEN_DIMS or fame_cfg.get("activation") != ACTIVATION:
+        raise ValueError(
+            f"FAME hidden_dims={fame_cfg.get('hidden_dims')} activation={fame_cfg.get('activation')!r} differ from "
+            f"agents/shared_net_cfg.py ({ACTOR_HIDDEN_DIMS}, {ACTIVATION!r}); edit skrl_fame_cfg.yaml."
+        )
+
+    # Budget per task = the rsl_rl runner config of the same task: max_iterations rollouts of
+    # num_steps_per_env steps, each followed by num_learning_epochs x num_mini_batches updates.
+    _rsl_cfg = load_cfg_from_registry(task_list[start_idx], "rsl_rl_cfg_entry_point")
+    _budget_steps = int(_rsl_cfg.max_iterations) * int(_rsl_cfg.num_steps_per_env)
+    if switch_steps is None:
+        switch_steps = _budget_steps
+    elif switch_steps != _budget_steps:
+        print(f"[WARN] --switch_steps {switch_steps} differs from the rsl_rl budget {_budget_steps} for this task.")
+    fame_cfg["rollout_steps"] = int(_rsl_cfg.num_steps_per_env)
+    fame_cfg["ppo_epochs"] = int(_rsl_cfg.algorithm.num_learning_epochs)
+    fame_cfg["ppo_num_mini_batches"] = int(_rsl_cfg.algorithm.num_mini_batches)
+    fame_cfg["num_mini_batches"] = int(_rsl_cfg.algorithm.num_mini_batches)
+    print(
+        f"[INFO] Budget matched to rsl_rl: {switch_steps} steps = {switch_steps // fame_cfg['rollout_steps']} rollouts "
+        f"x {fame_cfg['rollout_steps']} steps; {fame_cfg['ppo_epochs']} epochs x {fame_cfg['ppo_num_mini_batches']} "
+        f"mini-batches per rollout"
+    )
+
+    # ------------------------------------------------------------------
     # Unified TensorBoard x-axis: rescale every add_scalar global_step from
     # env-step rows (task_step) to cumulative minibatch optimizer updates, so
     # FAME's x-axis matches the rsl_rl methods (which count it * epochs * minibatches).
@@ -254,7 +287,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # Only the fast-actor PPO minibatch updates are counted; FAME's auxiliary
     # meta/distillation optimizer steps have no rsl_rl analog and are excluded.
     _ppo_epochs = int(fame_cfg.get("ppo_epochs", 8))
-    _num_mini_batches = int(fame_cfg.get("num_mini_batches", 8))
+    _num_mini_batches = int(fame_cfg["ppo_num_mini_batches"])
     _rollout_steps_cfg = int(fame_cfg.get("rollout_steps", 24))
     _xaxis_multiplier = (_ppo_epochs * _num_mini_batches) / _rollout_steps_cfg
     _scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

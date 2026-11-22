@@ -15,7 +15,7 @@ task learning a residual on top of the same fixed flat-walking policy.
 The first task's base is the shared base model (base_models/rough_walking.pth),
 overridable with ``--init_base``.
 
-Every run logs to ``logs/task2/<task name>/residual/<seed>`` (task name = the
+Every run logs to ``<log root>/<task name>/residual/<seed>`` (task name = the
 experiment name used under logs/task1), with the seed picked on
 the command line (``--seed``, default 42) and applied to every task in the chain.
 
@@ -44,6 +44,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/, for common.*
+from common.log_root import crl_log_root  # noqa: E402
+
 # Task sequence, matching the authoritative order in scripts/skrl/train_FAME_CRL.py
 # (TASKS). The first task is trained from the default/initial base; each subsequent
 # task is trained on top of the previous task's composed (base + residual) policy.
@@ -68,13 +71,13 @@ BASE_MODEL = str(
 )
 
 # train_res.py writes its saved policy here:
-#   logs/task2/<experiment_name>/residual/<seed>[_<run_name>]/complete_model_with_metadata.pth
+#   <log root>/<experiment_name>/residual/<seed>[_<run_name>]/complete_model_with_metadata.pth
 # The experiment name is a Hydra-config short name (anymal_c_jump_flat, ...) rather than the
 # gym task id the driver passes on the command line, so it stays a wildcard here.
 # The "<seed>*" wildcard matters too: under a wandb sweep every trial passes
 # `agent.run_name=${oc.env:WANDB_RUN_ID}`, so the directory is suffixed with the run id.
 def _model_glob(seed: int) -> str:
-    return f"logs/task2/*/residual/{seed}*/complete_model_with_metadata.pth"
+    return f"{crl_log_root()}/*/residual/{seed}*/complete_model_with_metadata.pth"
 
 
 def _latest_model_since(seed: int, t_start: float) -> str | None:
@@ -120,7 +123,7 @@ def main() -> None:
         type=int,
         default=42,
         help="Seed used for every task in the chain. Also the leaf of the log path: "
-        "logs/task2/<task name>/residual/<seed>.",
+        "<log root>/<task name>/residual/<seed>.",
     )
     parser.add_argument(
         "--start-from",

@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import numpy as np
 from rsl_rl.modules import ActorCritic
 
+from ..agents.shared_net_cfg import ACTIVATION, ACTOR_HIDDEN_DIMS, CRITIC_HIDDEN_DIMS, INIT_NOISE_STD
+
 @configclass
 class CompoCfg(RslRlPpoActorCriticCfg):
     """Configuration for the CompNet policy."""
@@ -14,14 +16,16 @@ class CompoCfg(RslRlPpoActorCriticCfg):
     obs_dim: int = 235
     device: str = "cuda"
     class_name: str = "CompoActorCritic"
-    activation: str = "elu"
+    activation: str = ACTIVATION
     actor_obs_normalization: bool = False
     critic_obs_normalization: bool = False
     # The real per-task network. NOTE: entry [0] doubles as CompoNet's attention
     # dimension (hidden_dim), see CompoActorCritic.__init__.
-    internal_policy_hidden_dims: list[int] = [512, 512, 256]
-    actor_hidden_dims: list[int] = [512, 256, 128]  # unused: self.actor is replaced by CompoNet
-    critic_hidden_dims: list[int] = [512, 256, 128]
+    # Shared with every method (agents/shared_net_cfg.py); was [512, 512, 256] from a per-method sweep.
+    internal_policy_hidden_dims: list[int] = list(ACTOR_HIDDEN_DIMS)
+    actor_hidden_dims: list[int] = list(ACTOR_HIDDEN_DIMS)  # unused: self.actor is replaced by CompoNet
+    critic_hidden_dims: list[int] = list(CRITIC_HIDDEN_DIMS)
+    init_noise_std: float = INIT_NOISE_STD  # was unset -> CompoActorCritic fell back to 0.8
     prevs_dir: list = []
     
 

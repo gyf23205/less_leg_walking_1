@@ -211,6 +211,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     def _remap_load(state_dict, *args, **kwargs):
         fixed, n = {}, 0
         for k, v in state_dict.items():
+            if k.startswith("actor."):
+                # Unused ActorCritic.actor kept by checkpoints saved before it was removed from
+                # MoEActorCritic; it never affected actions, so drop it.
+                continue
             if k.startswith("kaes.0."):
                 k = k.replace("kaes.0.", "kae.", 1); n += 1
             fixed[k] = v
@@ -233,11 +237,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if hasattr(policy_nn, "student_obs_normalizer"):
         policy_nn.student_obs_normalizer = torch.nn.Identity()
 
-    # export policy to onnx/jit
-    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    # normalizer expects 226-D but we pad to 256; skip it to avoid shape mismatch
-    export_policy_as_jit(policy_nn, normalizer=None, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(policy_nn, normalizer=None, path=export_model_dir, filename="policy.onnx")
+    # Isaac Lab's exporter copies policy.actor, which MoEActorCritic does not have (its policy is
+    # forward(): KAE experts + mlp_network). Exporting used to write an untrained network, so skip it.
+    print("[INFO] Skipping JIT/ONNX export: Isaac Lab's exporter does not support MoEActorCritic.")
 
     dt = env.unwrapped.step_dt
 

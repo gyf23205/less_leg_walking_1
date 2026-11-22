@@ -91,6 +91,8 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 
 import gymnasium as gym
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/, for common.*
+from common.log_root import crl_log_root  # noqa: E402
 import time
 import torch
 import numpy as np
@@ -157,9 +159,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         )
 
     # specify directory for logging experiments:
-    #   logs/task2/<task name>/<method name>/<seed>
+    #   <log root>/<task name>/<method name>/<seed>
     # matching train_componet.py / train_res.py / train_moe.py.
-    log_root_path = os.path.join("logs", "task2", agent_cfg.experiment_name, "scratch")
+    log_root_path = os.path.join(crl_log_root(), agent_cfg.experiment_name, "scratch")
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs: the seed, chosen with --seed on the command line
